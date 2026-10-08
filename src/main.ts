@@ -97,7 +97,7 @@ function bindCanvas(){
  stage.onpointermove=e=>{if(!start||e.pointerId!==start.id)return;if(e.pointerType==="mouse"&&e.buttons===0){start=null;return;}if(!dragged&&Math.hypot(e.clientX-start.clientX,e.clientY-start.clientY)<8)return;dragged=true;stage.setPointerCapture(e.pointerId);const p=point(e.clientX,e.clientY);dx=start.dx+p.x-start.x;dy=start.dy+p.y-start.y;updateTransform();};
  const release=(e:PointerEvent)=>{if(start?.id===e.pointerId)start=null;};
  window.addEventListener("pointerup",release);window.addEventListener("pointercancel",release);
- window.addEventListener("blur",()=>{start=null;dragged=false;});stage.onlostpointercapture=()=>{start=null;};
+ window.addEventListener("blur",()=>{start=null;dragged=false;});stage.onlostpointercapture=e=>{if(e.target===stage)start=null;};
  stage.addEventListener("click",e=>{if(dragged){e.preventDefault();e.stopPropagation();dragged=false;}},true);
  stage.addEventListener("wheel",e=>{e.preventDefault();changeZoom(e.deltaY<0?.1:-.1);}, {passive:false});
  stage.onkeydown=e=>{if(e.target!==stage)return;const moves:Record<string,[number,number]>={ArrowLeft:[90,0],ArrowRight:[-90,0],ArrowUp:[0,90],ArrowDown:[0,-90]};if(moves[e.key]){e.preventDefault();dx+=moves[e.key][0];dy+=moves[e.key][1];updateTransform();}else if(e.key==="+"||e.key==="="){e.preventDefault();changeZoom(.2);}else if(e.key==="-"){e.preventDefault();changeZoom(-.2);}else if(e.key==="Home"){e.preventDefault();zoom=1;dx=dy=0;resizeCamera();}};
