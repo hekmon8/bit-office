@@ -1,6 +1,6 @@
 import "./style.css";
 import { demoOffice, labels, activities, executionState, type Agent, type Room, type Activity, validateOffice, roomSlot, assignActivity } from "./model";
-import {readFreshness,layoutRoom,floorHeight,fitViewport,constrainPan} from "./view";
+import {readFreshness,layoutRoom,floorHeight,fitViewport,constrainPan,compactRoomLabel} from "./view";
 let office=demoOffice(),filter:Activity|""="",zoom=1,dx=0,dy=0,simulating=false,simTimer:ReturnType<typeof setInterval>|undefined;
 let lastSuccessfulReadAt:string|null=null;
 const $=<T extends Element=HTMLElement>(s:string)=>document.querySelector(s) as T;
@@ -34,7 +34,7 @@ type View={kind:"rooms"|"settings"|"mcp"|"status"|"expand"}|{kind:"room"|"agent"
 type FocusKey={selector:string;index:number};
 let views:View[]=[],returnFocus:FocusKey|null=null,viewFocus:FocusKey[]=[];
 let localRevision=0,readFailed=false,snapshotSource:"builtin"|"server"="builtin";
-let cameraWidth=1260,cameraHeight=720,cameraScale=1;
+let cameraWidth=1260,cameraHeight=720,cameraScale=1,lastLabelScale=0;
 function maximumZoom(){return Math.max(2.4,1.25/cameraScale);}
 const icons:Record<string,string>={rooms:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>',mcp:'<path d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-11-2 22"/>',fit:'<path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/>',plus:'<path d="M12 5v14M5 12h14"/>',minus:'<path d="M5 12h14"/>',close:'<path d="m6 6 12 12M6 18 18 6"/>',back:'<path d="m14 5-7 7 7 7"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 10v7m0-10v1"/>',arrow:'<path d="M5 12h14m-6-6 6 6-6 6"/>'};
 function icon(name:string){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;}
@@ -70,7 +70,7 @@ function mount(){
  window.addEventListener("focus",renderStatus);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")renderStatus();});
 }
 function renderOffice(){
- const focused=focusKey(document.activeElement);$("#map-stage").innerHTML=mapSVG();resizeCamera();bindTargets($("#map-stage"));renderStatus();if(focused&&!$<HTMLDialogElement>("#detail").open)restoreFocus(focused);
+ const focused=focusKey(document.activeElement);$("#map-stage").innerHTML=mapSVG();lastLabelScale=0;resizeCamera();bindTargets($("#map-stage"));renderStatus();if(focused&&!$<HTMLDialogElement>("#detail").open)restoreFocus(focused);
 }
 function resizeCamera(){
  const stage=$("#map-stage"),cx=(cameraWidth/2-dx)/zoom,cy=(cameraHeight/2-dy)/zoom;
@@ -86,10 +86,31 @@ function updateTransform(){
  dy=constrainPan(dy,cameraHeight,floorHeight(office.rooms)*zoom);
  $("#floor-content").setAttribute("transform",`translate(${dx} ${dy}) scale(${zoom})`);
  const unit=cameraScale*zoom,floor=$("#floor");
- floor.style.setProperty("--room-label-size",`${Math.max(14,10/unit)}px`);
- floor.style.setProperty("--room-count-size",`${Math.max(11,8/unit)}px`);
  floor.classList.toggle("overview",unit<44/48);
- floor.querySelectorAll(".pet-hit,.desk-hit").forEach(el=>el.setAttribute("tabindex",unit<44/48?"-1":"0"));
+ if(unit!==lastLabelScale){
+  lastLabelScale=unit;
+  floor.style.setProperty("--room-label-size",`${Math.max(14,10/unit)}px`);
+  floor.style.setProperty("--room-count-size",`${Math.max(11,8/unit)}px`);
+  const compactRooms=new Set<string>();
+  floor.querySelectorAll<SVGGElement>(".room-shape").forEach(group=>{
+   const id=group.querySelector("[data-room]")!.getAttribute("data-room")!,r=layoutRoom(office.rooms.find(r=>r.id===id)!);
+   const name=group.querySelector<SVGTextElement>(".room-name")!,count=group.querySelector<SVGTextElement>(".room-count")!;
+   name.textContent=r.name;name.setAttribute("x",String(r.x+18));name.setAttribute("y",String(r.y+35));
+   const compact=unit<44/48&&name.getComputedTextLength()+count.getComputedTextLength()+2/unit>r.w-36;
+   group.classList.toggle("compact-label",compact);
+   if(compact){
+    compactRooms.add(id);name.textContent="";
+    compactRoomLabel(r.name,r.w*unit).forEach((line,i)=>{
+     const span=document.createElementNS("http://www.w3.org/2000/svg","tspan");
+     span.setAttribute("x",String(r.x+2/unit));span.setAttribute("y",String(r.y+(12+i*12)/unit));span.textContent=line;name.append(span);
+    });
+   }
+  });
+  floor.querySelectorAll<SVGGElement>(".pet-hit").forEach(el=>{
+   const a=office.agents.find(a=>a.id===el.getAttribute("data-agent"))!;el.classList.toggle("compact-room-pet",compactRooms.has(a.roomId));
+  });
+  floor.querySelectorAll(".pet-hit,.desk-hit").forEach(el=>el.setAttribute("tabindex",unit<44/48?"-1":"0"));
+ }
  $<HTMLButtonElement>("#zoom-in").disabled=zoom>=maximumZoom();$<HTMLButtonElement>("#zoom-out").disabled=zoom<=1;
 }
 function changeZoom(delta:number){

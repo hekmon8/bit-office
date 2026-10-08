@@ -25,3 +25,10 @@ export function fitViewport(width:number,height:number,sceneWidth:number,sceneHe
 export function constrainPan(offset:number,viewport:number,scene:number){
  return scene<=viewport?(viewport-scene)/2:Math.max(viewport-scene,Math.min(0,offset));
 }
+
+
+/** Conservative glyph budget for readable labels in very small overview rooms. */
+export function compactRoomLabel(name:string,screenWidth:number){
+ const chars=Array.from(name.replace(/\s+/g,"")),columns=Math.max(1,Math.floor((screenWidth-4)/10));
+ return Array.from({length:Math.ceil(chars.length/columns)},(_,i)=>chars.slice(i*columns,(i+1)*columns).join(""));
+}

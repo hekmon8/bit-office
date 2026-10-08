@@ -59,3 +59,13 @@ describe("full-scene camera on mobile and resized viewports",()=>{
   }
  });
 });
+
+
+import {compactRoomLabel} from "../src/view";
+describe("maximum-expansion overview labels",()=>{
+ it("wraps narrow room names instead of colliding with capacity",()=>{
+  expect(compactRoomLabel("会议室 C",280*369/3380)).toEqual(["会议","室C"]);
+  expect(compactRoomLabel("茶水间",205*369/3380)).toEqual(["茶","水","间"]);
+  expect(compactRoomLabel("开放工位",430*369/3380)).toEqual(["开放工位"]);
+ });
+});
