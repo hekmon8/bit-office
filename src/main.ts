@@ -1,6 +1,6 @@
 import "./style.css";
 import { demoOffice, labels, activities, executionState, type Agent, type Room, type Activity, validateOffice, roomSlot, assignActivity } from "./model";
-import {readFreshness,layoutRoom,floorHeight} from "./view";
+import {readFreshness,layoutRoom,floorHeight,fitViewport,constrainPan} from "./view";
 let office=demoOffice(),filter:Activity|""="",zoom=1,dx=0,dy=0,simulating=false,simTimer:ReturnType<typeof setInterval>|undefined;
 let lastSuccessfulReadAt:string|null=null;
 const $=<T extends Element=HTMLElement>(s:string)=>document.querySelector(s) as T;
@@ -34,7 +34,8 @@ type View={kind:"rooms"|"settings"|"mcp"|"status"|"expand"}|{kind:"room"|"agent"
 type FocusKey={selector:string;index:number};
 let views:View[]=[],returnFocus:FocusKey|null=null,viewFocus:FocusKey[]=[];
 let localRevision=0,readFailed=false,snapshotSource:"builtin"|"server"="builtin";
-let cameraWidth=1260,cameraHeight=720;
+let cameraWidth=1260,cameraHeight=720,cameraScale=1;
+function maximumZoom(){return Math.max(2.4,1.25/cameraScale);}
 const icons:Record<string,string>={rooms:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>',mcp:'<path d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-11-2 22"/>',fit:'<path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/>',plus:'<path d="M12 5v14M5 12h14"/>',minus:'<path d="M5 12h14"/>',close:'<path d="m6 6 12 12M6 18 18 6"/>',back:'<path d="m14 5-7 7 7 7"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 10v7m0-10v1"/>',arrow:'<path d="M5 12h14m-6-6 6 6-6 6"/>'};
 function icon(name:string){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;}
 function iconButton(id:string,name:string,label:string){return `<button id="${id}" class="icon-button" aria-label="${label}" title="${label}">${icon(name)}</button>`;}
@@ -58,12 +59,12 @@ function renderStatus(){
  $("#office-status").setAttribute("aria-label",`查看示例状态：${running} 运行、${waiting} 等待、${blocked} 阻塞。${f.label}`);
 }
 function mount(){
- $("#app").innerHTML=`<header class="app-header"><div class="brand"><span class="brand-bit" aria-hidden="true">▟</span><h1>Bit 小屋</h1></div><nav aria-label="办公室工具">${iconButton("open-rooms","rooms","房间与成员")}${iconButton("open-mcp","mcp","MCP 接入")}${iconButton("open-settings","settings","设置与说明")}</nav></header><main class="office-canvas" aria-label="Agent 工作空间"><div id="map-stage" tabindex="0" aria-label="工作空间：拖动平移，方向键平移，加减键缩放，Home 适配全图"></div><div class="canvas-bottom"><button id="office-status" class="status-pill" aria-haspopup="dialog"></button><div class="camera-tools" aria-label="视图控制">${iconButton("zoom-out","minus","缩小工作空间")}${iconButton("reset-view","fit","适配全图")}${iconButton("zoom-in","plus","放大工作空间")}</div></div><div id="pan-hint" aria-hidden="true">拖动查看房间</div></main><dialog id="detail" aria-labelledby="detail-title"><div class="dialog-head">${iconButton("back-detail","back","返回上一层")}<span id="dialog-source">BIT OFFICE / 合成示例</span>${iconButton("close-detail","close","关闭窗口，返回工作空间")}</div><div id="detail-content"></div></dialog><div id="toast" role="status"></div>`;
+ $("#app").innerHTML=`<header class="app-header"><div class="brand"><span class="brand-bit" aria-hidden="true">▟</span><h1>Bit 小屋</h1></div><nav aria-label="办公室工具">${iconButton("open-rooms","rooms","房间与成员")}${iconButton("open-mcp","mcp","MCP 接入")}${iconButton("open-settings","settings","设置与说明")}</nav></header><main class="office-canvas" aria-label="Agent 工作空间"><div id="map-stage" tabindex="0" aria-label="工作空间：拖动平移，方向键平移，加减键缩放，Home 适配全图"></div><div class="canvas-bottom"><button id="office-status" class="status-pill" aria-haspopup="dialog"></button><div class="camera-tools" aria-label="视图控制">${iconButton("zoom-out","minus","缩小工作空间")}${iconButton("reset-view","fit","适配全图")}${iconButton("zoom-in","plus","放大工作空间")}</div></div></main><dialog id="detail" aria-labelledby="detail-title"><div class="dialog-head">${iconButton("back-detail","back","返回上一层")}<span id="dialog-source">BIT OFFICE / 合成示例</span>${iconButton("close-detail","close","关闭窗口，返回工作空间")}</div><div id="detail-content"></div></dialog><div id="toast" role="status"></div>`;
  $("#open-rooms").onclick=()=>openView({kind:"rooms"});$("#open-settings").onclick=()=>openView({kind:"settings"});$("#open-mcp").onclick=()=>openView({kind:"mcp"});$("#office-status").onclick=()=>openView({kind:"status"});
  $("#close-detail").onclick=closeViews;$("#back-detail").onclick=backView;
  const dialog=$<HTMLDialogElement>("#detail");dialog.addEventListener("cancel",e=>{e.preventDefault();closeViews();});
  dialog.addEventListener("click",e=>{const r=dialog.getBoundingClientRect();if(e.target===dialog&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom))closeViews();});
- $("#zoom-in").onclick=()=>changeZoom(.2);$("#zoom-out").onclick=()=>changeZoom(-.2);$("#reset-view").onclick=()=>{zoom=1;dx=dy=0;resizeCamera();};
+ $("#zoom-in").onclick=()=>changeZoom(zoom*.35);$("#zoom-out").onclick=()=>changeZoom(-zoom*.35);$("#reset-view").onclick=()=>{zoom=1;dx=dy=0;resizeCamera();};
  bindCanvas();renderOffice();new ResizeObserver(()=>resizeCamera()).observe($("#map-stage"));
  setInterval(()=>renderStatus(),30000);
  window.addEventListener("focus",renderStatus);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")renderStatus();});
@@ -71,28 +72,35 @@ function mount(){
 function renderOffice(){
  const focused=focusKey(document.activeElement);$("#map-stage").innerHTML=mapSVG();resizeCamera();bindTargets($("#map-stage"));renderStatus();if(focused&&!$<HTMLDialogElement>("#detail").open)restoreFocus(focused);
 }
-function minimumZoom(){const s=$("#map-stage");return s.clientWidth<700||s.clientHeight<420?1:.6;}
 function resizeCamera(){
- const stage=$("#map-stage"),mobile=stage.clientWidth<700||stage.clientHeight<420;
- zoom=Math.max(minimumZoom(),zoom);
- cameraHeight=mobile?Math.min(floorHeight(office.rooms),Math.max(1,stage.clientHeight)*1.05):floorHeight(office.rooms);
- cameraWidth=mobile?cameraHeight*stage.clientWidth/Math.max(stage.clientHeight,1):officeWidth();
+ const stage=$("#map-stage"),cx=(cameraWidth/2-dx)/zoom,cy=(cameraHeight/2-dy)/zoom;
+ const next=fitViewport(stage.clientWidth,stage.clientHeight,officeWidth(),floorHeight(office.rooms));
+ cameraWidth=next.width;cameraHeight=next.height;cameraScale=next.scale;
+ zoom=Math.max(1,Math.min(maximumZoom(),zoom));
+ dx=zoom===1?0:cameraWidth/2-cx*zoom;dy=zoom===1?0:cameraHeight/2-cy*zoom;
  $("#floor").setAttribute("viewBox",`0 0 ${cameraWidth} ${cameraHeight}`);
- $("#reset-view").setAttribute("aria-label",mobile?"回到入口视图":"适配全图");$("#reset-view").title=mobile?"回到入口视图":"适配全图";$("#pan-hint").hidden=!mobile;updateTransform();
+ updateTransform();
 }
 function updateTransform(){
- dx=Math.max(Math.min(0,cameraWidth-officeWidth()*zoom),Math.min(Math.max(0,cameraWidth-officeWidth()*zoom),dx));
- dy=Math.max(Math.min(0,cameraHeight-floorHeight(office.rooms)*zoom),Math.min(Math.max(0,cameraHeight-floorHeight(office.rooms)*zoom),dy));
+ dx=constrainPan(dx,cameraWidth,officeWidth()*zoom);
+ dy=constrainPan(dy,cameraHeight,floorHeight(office.rooms)*zoom);
  $("#floor-content").setAttribute("transform",`translate(${dx} ${dy}) scale(${zoom})`);
- $<HTMLButtonElement>("#zoom-in").disabled=zoom>=2.4;$<HTMLButtonElement>("#zoom-out").disabled=zoom<=minimumZoom();
+ const unit=cameraScale*zoom,floor=$("#floor");
+ floor.style.setProperty("--room-label-size",`${Math.max(14,10/unit)}px`);
+ floor.style.setProperty("--room-count-size",`${Math.max(11,8/unit)}px`);
+ floor.classList.toggle("overview",unit<44/48);
+ floor.querySelectorAll(".pet-hit,.desk-hit").forEach(el=>el.setAttribute("tabindex",unit<44/48?"-1":"0"));
+ $<HTMLButtonElement>("#zoom-in").disabled=zoom>=maximumZoom();$<HTMLButtonElement>("#zoom-out").disabled=zoom<=1;
 }
 function changeZoom(delta:number){
- const old=zoom;zoom=Math.max(minimumZoom(),Math.min(2.4,zoom+delta));dx=cameraWidth/2-(cameraWidth/2-dx)*zoom/old;dy=cameraHeight/2-(cameraHeight/2-dy)*zoom/old;updateTransform();
- $<HTMLButtonElement>("#zoom-in").disabled=zoom>=2.4;$<HTMLButtonElement>("#zoom-out").disabled=zoom<=minimumZoom();
+ const old=zoom;zoom=Math.max(1,Math.min(maximumZoom(),zoom+delta));
+ dx=cameraWidth/2-(cameraWidth/2-dx)*zoom/old;dy=cameraHeight/2-(cameraHeight/2-dy)*zoom/old;updateTransform();
 }
 function bindCanvas(){
  const stage=$("#map-stage");let start:{id:number;x:number;y:number;dx:number;dy:number;clientX:number;clientY:number}|null=null,dragged=false;
  const point=(x:number,y:number)=>{const matrix=$<SVGSVGElement>("#floor").getScreenCTM();return matrix?new DOMPoint(x,y).matrixTransform(matrix.inverse()):new DOMPoint(x,y);};
+ stage.addEventListener("selectstart",e=>e.preventDefault());
+ stage.addEventListener("contextmenu",e=>e.preventDefault());
  stage.onpointerdown=e=>{if(start||e.button!==0)return;const p=point(e.clientX,e.clientY);start={id:e.pointerId,x:p.x,y:p.y,dx,dy,clientX:e.clientX,clientY:e.clientY};dragged=false;};
  stage.onpointermove=e=>{if(!start||e.pointerId!==start.id)return;if(e.pointerType==="mouse"&&e.buttons===0){start=null;return;}if(!dragged&&Math.hypot(e.clientX-start.clientX,e.clientY-start.clientY)<8)return;dragged=true;stage.setPointerCapture(e.pointerId);const p=point(e.clientX,e.clientY);dx=start.dx+p.x-start.x;dy=start.dy+p.y-start.y;updateTransform();};
  const release=(e:PointerEvent)=>{if(start?.id===e.pointerId)start=null;};

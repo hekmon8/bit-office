@@ -13,3 +13,15 @@ export function layoutRoom(room:Room):Room{
  return {...room,y:room.y>=385?room.y+64:room.y,h:Math.max(room.h,room.y>=385?400:324)};
 }
 export function floorHeight(rooms:Room[]){return Math.max(720,...rooms.map(room=>{const r=layoutRoom(room);return r.y+r.h+35;}));}
+
+
+/** A full-scene camera, with equal CSS-pixel scale on both axes. */
+export function fitViewport(width:number,height:number,sceneWidth:number,sceneHeight:number){
+ const aspect=Math.max(1,width)/Math.max(1,height);
+ const cameraWidth=Math.max(sceneWidth,sceneHeight*aspect),cameraHeight=cameraWidth/aspect;
+ return {width:cameraWidth,height:cameraHeight,scale:Math.max(1,width)/cameraWidth};
+}
+/** Center a smaller scene; bound a zoomed scene without exposing empty edges. */
+export function constrainPan(offset:number,viewport:number,scene:number){
+ return scene<=viewport?(viewport-scene)/2:Math.max(viewport-scene,Math.min(0,offset));
+}
