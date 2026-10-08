@@ -7,10 +7,10 @@ Demo: https://bit-office.macros-hekk.workers.dev
 ## What runs here
 
 - Top-down office: meeting rooms, discussion room, desks, kitchen, fishing pond, charging nests.
-- Desktop map with pan, zoom and pet / room details. Mobile opens a room-list view with modal room and agent details.
+- Space-first desktop and mobile map with pan, zoom and pet / occupied-desk task details. Room lists, status, settings and MCP instructions open in dismissible dialogs with back navigation and focus restoration.
 - Browser-only demo activity changes and bounded meeting-room expansion.
 - Five read-only MCP tools returning **synthetic sample data only**.
-- Separate execution counts, connectivity, task handoff evidence and observation timestamps.
+- Separate execution counts, connectivity, task handoff evidence and observation timestamps. The compact source badge remains visible; successful reads expire after two minutes and offline fallback is explicit.
 
 The public server is stateless. Browser simulation is private to the current page and resets on reload; it does not update the MCP snapshot. No real Multica workspace, agent, task, credential or execution runtime is connected. All members and events are illustrative. “Meeting”, “resting” and “fishing” are demo animations, not inferred from runtime idleness.
 
