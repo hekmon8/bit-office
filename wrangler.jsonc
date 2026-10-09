@@ -13,5 +13,18 @@
   },
   "observability": {
     "enabled": false
+  },
+  "routes": [
+    {
+      "pattern": "agents.hekmon.com",
+      "custom_domain": true
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "bit-office-staging",
+      "workers_dev": true,
+      "routes": []
+    }
   }
 }
