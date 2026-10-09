@@ -2,7 +2,9 @@
 
 An original pixel-pet office floor plan, deployed on Cloudflare Workers with a read-only **Streamable HTTP MCP** endpoint.
 
-Demo: https://bit-office.macros-hekk.workers.dev
+Demo: https://agents.hekmon.com
+
+The original https://bit-office.macros-hekk.workers.dev address remains available.
 
 ## What runs here
 
@@ -29,7 +31,7 @@ Open http://localhost:8787. For UI hot reload, keep the Worker running and run `
 
 ## ChatGPT / MCP
 
-Endpoint: `https://bit-office.macros-hekk.workers.dev/mcp`.
+Endpoint: `https://agents.hekmon.com/mcp`.
 
 The public demo does not require authentication because it exposes no private data. Configure a remote MCP app with the Streamable HTTP endpoint and “no authentication”, if your ChatGPT account / workspace permits it. Scan tools, then read the synthetic office state. Actual ChatGPT connection must be tested separately; a local MCP test is not that verification.
 
@@ -62,7 +64,7 @@ Workers Builds configuration:
 
 - Repository: `hekmon8/bit-office`; deployment owner: `hekmon8`
 - Production Worker: `bit-office`; production branch: `main`
-- PR candidates: isolated `bit-office-staging` Worker, verified before promotion
+- PR candidates: isolated `bit-office-staging` Worker, verified before promotion; deploy with `npx wrangler deploy --env staging` so production domain routes are excluded
 - Root: `/`
 - Build command: `npm run check`
 - Deploy command: `npx wrangler deploy`
