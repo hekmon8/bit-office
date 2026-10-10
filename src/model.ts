@@ -12,9 +12,8 @@ export function executionState(tasks:Task[], complete:boolean, fresh:boolean) {
  return {running,waiting,blocked:tasks.filter(t=>t.blocked && !["completed","failed","cancelled"].includes(t.status)).length,
   label:running?"运行":waiting?"等待":complete&&fresh?"空闲":"未知"};
 }
-export function demoOffice(now=new Date()):Office{
- const at=(minutes:number)=>new Date(now.getTime()-minutes*60000).toISOString();
- const rooms:Room[]=[
+export function defaultRooms():Room[]{
+ return [
   {id:"meeting-a",name:"会议室 A",kind:"meeting",topic:"Q4 路线图评审",capacity:8,x:30,y:30,w:310,h:260},
   {id:"discussion",name:"讨论室 1",kind:"discussing",topic:"缓存失效方案",capacity:6,x:360,y:30,w:300,h:260},
   {id:"meeting-b",name:"会议室 B",kind:"meeting",topic:"空闲",capacity:8,x:680,y:30,w:290,h:260},
@@ -23,6 +22,10 @@ export function demoOffice(now=new Date()):Office{
   {id:"pond",name:"摸鱼区",kind:"fishing",topic:"小池塘 · 演示动作",capacity:4,x:705,y:385,w:240,h:290},
   {id:"nest",name:"充电窝",kind:"offline",topic:"离线宠物的窝",capacity:4,x:990,y:385,w:230,h:290}
  ];
+}
+export function demoOffice(now=new Date()):Office{
+ const at=(minutes:number)=>new Date(now.getTime()-minutes*60000).toISOString();
+ const rooms=defaultRooms();
  const members:[string,string,Activity,string][]=[
   ["Nova","#afa0f4","meeting","meeting-a"],["Orion","#e7b774","meeting","meeting-a"],["Sage","#98cda8","meeting","meeting-a"],
   ["Echo","#ed97b9","discussing","discussion"],["Kite","#83cce3","discussing","discussion"],
