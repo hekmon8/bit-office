@@ -1,8 +1,10 @@
 import type { ExecutionContext } from "@cloudflare/workers-types";
 import { mcpHandler } from "./mcp";
 import { demoOffice } from "./model";
-import { AdapterError, authorizeLive, readUpstreamConfig, readUpstreamOffice, type UpstreamEnv } from "./upstream-mcp";
-export interface Env extends UpstreamEnv {ASSETS:{fetch(request:Request):Promise<Response>};}
+import { authorizeManaged, managedMcpHandler, type ManagedEnv } from "./managed-mcp";
+export { OfficeStore } from "./office-store";
+import { AdapterError, authorizeLive, readUpstreamConfig, readUpstreamOffice } from "./upstream-mcp";
+export interface Env extends ManagedEnv {ASSETS:{fetch(request:Request):Promise<Response>};}
 const headers={"X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer","X-Frame-Options":"DENY","Cache-Control":"no-store"};
 function json(data:unknown,status=200){return Response.json(data,{status,headers});}
 export default {
@@ -29,6 +31,13 @@ export default {
   if(url.pathname==="/api/demo/state")return request.method==="GET"?json(demoOffice()):json({error:"Read-only endpoint"},405);
   if(url.pathname.startsWith("/api/"))return json({error:"Unknown endpoint; public server has no write API"},404);
   if(url.pathname==="/mcp"){
+   let handler=mcpHandler;
+   if(request.headers.has("Authorization")){
+    try {
+     if(!await authorizeManaged(request,env))return new Response(JSON.stringify({error:"unauthorized"}),{status:401,headers:{...headers,"Content-Type":"application/json","WWW-Authenticate":'Bearer realm="bit-office-managed"'}});
+     handler=managedMcpHandler(env);
+    } catch(error){return json({error:error instanceof AdapterError?error.code:"not_configured"},503);}
+   }
    if(!["POST","GET","DELETE"].includes(request.method))return json({error:"Method not allowed"},405);
    if(request.method==="POST"){
     if(!request.headers.get("Content-Type")?.toLowerCase().startsWith("application/json"))return json({error:"JSON required"},415);
@@ -38,7 +47,7 @@ export default {
     const bytes=new Uint8Array(size);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.length;}
     request=new Request(request,{body:bytes});
    }
-   const response=await mcpHandler.fetch(request);
+   const response=await handler.fetch(request);
    const copy=new Response(response.body,response);
    Object.entries(headers).forEach(([k,v])=>copy.headers.set(k,v));
    return copy;

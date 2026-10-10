@@ -20,11 +20,18 @@
       "custom_domain": true
     }
   ],
+  "durable_objects": {
+    "bindings": [{ "name": "OFFICE", "class_name": "OfficeStore" }]
+  },
+  "migrations": [{ "tag": "v1-office-store", "new_sqlite_classes": ["OfficeStore"] }],
   "env": {
     "staging": {
       "name": "bit-office-staging",
       "workers_dev": true,
-      "routes": []
+      "routes": [],
+      "durable_objects": {
+        "bindings": [{ "name": "OFFICE", "class_name": "OfficeStore" }]
+      }
     }
   }
 }
