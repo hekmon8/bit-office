@@ -4,8 +4,9 @@ import worker, { OfficeStore, type Env } from "../src/worker";
 const token = "managed-test-token-with-at-least-32-characters";
 function setup() {
  const data = new Map<string, unknown>();
+ let failWrite = false;
  const storage = {
-  kv: { get: (key: string) => structuredClone(data.get(key)), put: (key: string, value: unknown) => { data.set(key, structuredClone(value)); } },
+  kv: { get: (key: string) => structuredClone(data.get(key)), put: (key: string, value: unknown) => { if (failWrite) { failWrite = false; throw new Error("Injected storage failure"); } data.set(key, structuredClone(value)); } },
   transactionSync: <T>(fn: () => T): T => {
    const previous = structuredClone(data);
    try { return fn(); } catch (error) { data.clear(); for (const [k, v] of previous) data.set(k, v); throw error; }
@@ -26,7 +27,7 @@ function setup() {
   return { status: response.status, body, value: payload?.startsWith("{") ? JSON.parse(payload) : undefined };
  };
  const call = (name: string, args: unknown, auth: string | null = token) => rpc("tools/call", { name, arguments: args }, auth);
- return { call, rpc, data, env, getReads: () => reads, restart: () => { store = makeStore(); } };
+ return { call, rpc, data, env, getReads: () => reads, failNextWrite: () => { failWrite = true; }, restart: () => { store = makeStore(); } };
 }
 describe("persistent authenticated Agent tools", () => {
  it("requires authentication before accessing storage, and never downgrades an invalid token to demo", async () => {
@@ -142,6 +143,16 @@ describe("persistent authenticated Agent tools", () => {
   const s = setup();const rotated = "rotated-token-with-at-least-32-characters";
   expect((await s.rpc("tools/list", {}, token, { OFFICE_MCP_TOKEN: rotated })).status).toBe(401);
   expect((await s.rpc("tools/list", {}, rotated, { OFFICE_MCP_TOKEN: rotated })).body.result.tools).toHaveLength(8);
+ });
+
+ it("preserves the entire snapshot when durable persistence fails, and permits a later retry", async () => {
+  const s = setup(); await s.call("create_agent", { agent_id: "one", name: "Original" });
+  const before = structuredClone(s.data.get("office")); s.failNextWrite();
+  const failed = await s.call("update_agent", { agent_id: "one", expected_revision: 1, name: "Lost update" });
+  expect(failed.body.result.isError).toBe(true); expect(failed.value.error).toBe("storage_unavailable");
+  expect(s.data.get("office")).toEqual(before);
+  expect((await s.call("get_agent_state", { agent_id: "one" })).value.agent).toMatchObject({ name: "Original", revision: 1 });
+  expect((await s.call("update_agent", { agent_id: "one", expected_revision: 1, name: "Retried" })).value.agent.revision).toBe(2);
  });
 
 });
