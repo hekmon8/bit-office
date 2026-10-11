@@ -1,6 +1,6 @@
 # Bit 小屋 · Bit Office
 
-An original pixel-pet office floor plan, deployed on Cloudflare Workers with a read-only **Streamable HTTP MCP** endpoint.
+An original pixel-pet office floor plan, deployed on Cloudflare Workers with a **Streamable HTTP MCP** endpoint for public demo reads and authenticated Agent management.
 
 Demo: https://agents.hekmon.com
 
@@ -12,10 +12,11 @@ The original https://bit-office.macros-hekk.workers.dev address remains availabl
 - Space-first desktop and mobile map with pan, zoom and pet / occupied-desk task details. Room lists, status, settings and MCP instructions open in dismissible dialogs with back navigation and focus restoration.
 - Browser-only demo activity changes and bounded meeting-room expansion.
 - Five public read-only MCP tools returning **synthetic sample data only**.
+- Three authenticated Agent-management tools with persistent server storage and revision checks.
 - An optional server-side MCP client and a protected office-state adapter, configured with a URL, authentication type and server-stored token.
 - Separate execution counts, connectivity, task handoff evidence and observation timestamps. The compact source badge remains visible; successful reads expire after two minutes and offline fallback is explicit.
 
-The public server is stateless. Browser simulation is private to the current page and resets on reload; it does not update the MCP snapshot. No real Multica workspace, agent, task, credential or execution runtime is configured by default. All members and events are illustrative. “Meeting”, “resting” and “fishing” are demo animations, not inferred from runtime idleness.
+The public demo is stateless. Browser simulation is private to the current page and resets on reload; it does not update the MCP snapshot. No real Multica workspace, agent, task, credential or execution runtime is configured by default. All members and events are illustrative. “Meeting”, “resting” and “fishing” are demo animations, not inferred from runtime idleness.
 
 ## Local development
 
@@ -44,7 +45,7 @@ The public demo does not require authentication because it exposes no private da
 | `get_task_handoff` | Explicit synthetic delegation, not retry parent IDs |
 | `get_connection_info` | Data provenance and unconnected integrations |
 
-There are no write tools, generic upstream proxy, agent execution or shared demo mutations. `GET /api/demo/state` and the public `/mcp` always serve the same synthetic source. The protected `/api/live/*` adapter requires explicit server configuration and a separate read credential; it never changes the public demo.
+Anonymous access has no write tools. `GET /api/demo/state` and anonymous `/mcp` requests always serve the synthetic source. Authenticated management tools are described below; they operate on separate persistent records. The protected `/api/live/*` adapter requires explicit server configuration and a separate read credential; it never changes the public demo.
 
 ## Server-side MCP connection
 
@@ -83,10 +84,10 @@ Unconfigured access returns `503`; missing/wrong read credentials return `401`; 
 
 MCP is a transport, not a common office-data schema. The selected tool must accept empty arguments and return this contract in `structuredContent` or one JSON text block. A service with different tools or payloads needs a service-specific adapter rather than automatic field guessing.
 
-- `mode`: `live` with `source: "mcp"`, or `demo` with `source: "synthetic"`. Synthetic sources stay synthetic after connection.
+- `mode`: `live` with `source: "mcp"` or `"managed"`, or `demo` with `source: "synthetic"`. Synthetic sources stay synthetic after connection.
 - `observedAt`: the source's ISO timestamp; not replaced by the adapter's read time.
 - `rooms`: `{ id, name, kind, topic, capacity, x, y, w, h }`, using the existing activity names (`working`, `meeting`, `discussing`, `resting`, `fishing`, `offline`).
-- `agents`: `{ id, name, color, activity, roomId, online, lastSeenAt, tasks, tasksComplete? }`. `lastSeenAt` may be `null`; missing `tasksComplete` defaults to `false`, so an empty task list is unknown rather than idle.
+- `agents`: `{ id, name, color, activity, roomId, online, lastSeenAt, tasks, tasksComplete?, revision?, updatedAt?, tasksObservedAt? }`. `lastSeenAt` may be `null`; missing `tasksComplete` defaults to `false`, so an empty task list is unknown rather than idle.
 - `tasks`: `{ id, title, status, blocked?, delegatedFrom?, handoffNote?, updatedAt?, handoffAt? }`, using the task statuses in `src/model.ts`.
 - `events`: `{ at, message }[]`.
 
@@ -97,6 +98,75 @@ IDs must be unique and contain only letters, digits, `_` or `-`; room references
 Use an upstream credential issued for the intended MCP service, workspace and read scopes. The upstream service remains responsible for validating its token issuer, audience, expiry and workspace membership. The adapter uses a separate operator-managed read token for its single configured source; it does not provide multi-user or workspace authorization. Do not copy browser cookies or private source code into this project. Do not forward one resource's token to a different audience. Store secrets only in an approved secret store; never in this repository.
 
 Online is independent of running. Running and queued tasks can coexist. A blocked issue is evidence for its task, not evidence that all execution stopped. Incomplete or stale task reads yield unknown rather than idle. Last successful read, task event and heartbeat times must remain distinct.
+
+## Persistent Agent management tools
+
+The same `/mcp` endpoint selects the managed office when the client sends
+`Authorization: Bearer <OFFICE_MCP_TOKEN>`. Configure the independent token
+only in server secrets; it must be 32–4096 non-whitespace characters and differ
+from both upstream and adapter-read tokens. Clients need the management token
+in their MCP request headers. Tokens are never persisted in Agent records or
+browser storage. An incorrect supplied token returns 401; missing server
+configuration returns 503. Anonymous requests retain the five public demo tools
+and cannot read or mutate the managed office. This is one operator-managed
+office, not per-user or per-workspace access control. Any holder of the management
+token can read and update all managed records.
+
+Authenticated clients see the original five read tools, now reading the managed
+store, plus these three write tools:
+
+| Tool | Arguments | Behavior |
+| --- | --- | --- |
+| `create_agent` | `agent_id`, `name`; optional `color`, `activity`, `room_id` | Registers a persistent record; duplicate IDs fail without overwriting. Defaults to offline, in an available offline room, with no heartbeat or tasks. |
+| `update_agent` | `agent_id`, `expected_revision`; `name` and/or `color` | Updates profile fields and increments the Agent revision. |
+| `update_agent_status` | `agent_id`, `expected_revision`; optional `activity`, `room_id`, `online`, `heartbeat`, `tasks`, `tasks_complete` | Reports status and optionally replaces the Agent's task list. |
+
+Read `get_agent_state` first and send `agent.revision` as `expected_revision`.
+A concurrent update returns `revision_conflict`; read again before retrying.
+For retrying creates, use the same `agent_id` and read the existing record after
+`agent_exists`. Room assignment checks compatible activity and remaining
+capacity within the same storage transaction. There are at most 100 Agent
+records, 50 reported tasks per Agent, 100 recent events and a bounded snapshot.
+Unknown fields and inconsistent task IDs/handoff references are rejected.
+No delete, arbitrary execution or upstream write forwarding is provided.
+
+Example tool arguments:
+
+```json
+{"agent_id":"builder","name":"Builder","activity":"working"}
+```
+
+```json
+{"agent_id":"builder","expected_revision":1,"activity":"working","heartbeat":true,"tasks":[{"id":"build-1","title":"Build application","status":"running"}],"tasks_complete":true}
+```
+
+`heartbeat: true` records the server receipt time and reports online. Changing
+profile, activity or `online` alone does not fabricate a heartbeat. Activity,
+connectivity and task execution remain independent. Replacing tasks without
+`tasks_complete` makes completeness unknown; omitting `tasks` preserves the
+existing list and task-event timestamps. The server records `tasksObservedAt`
+only for explicit task/completeness reports; heartbeats and profile changes do
+not refresh it. Reports older than two minutes yield `tasksFresh: false` and an
+unknown execution label, while retaining the reported counts. Offline activity cannot be combined
+with an online/heartbeat report. Task states are client reports, not
+provider-verified execution. Creating an Agent registers data and never starts
+a Codex/Claude process. The website still displays its labelled demo; private
+managed records are exposed only through authenticated MCP.
+
+Managed snapshots use `mode: "live"`, `source: "managed"`; connection information
+reports `stateAuthority: "client_reports"` and `runtimeConnected: false`.
+They are separate from the externally configured upstream MCP adapter. That
+adapter can explicitly connect to a managed office using its read-only state
+tool, but its upstream credential must differ from the caller's reader token.
+
+Storage uses the `OFFICE` SQLite Durable Object and the additive
+`v1-office-store` class migration. Staging has a separate Worker namespace and
+must use its own token. The migration creates new storage; it does not import
+synthetic agents or mutate existing upstream data. For local workerd checks,
+configure a local `.dev.vars` token and run `npm run dev:worker`. Production
+activation requires deployment of the new binding/class and a separately
+authorized, recoverably stored management secret. No secret is generated or
+uploaded by this feature.
 
 ## Deployment
 
