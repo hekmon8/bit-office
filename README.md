@@ -123,6 +123,40 @@ store, plus these three write tools:
 
 Read `get_agent_state` first and send `agent.revision` as `expected_revision`.
 A concurrent update returns `revision_conflict`; read again before retrying.
+
+### OAuth and Bearer Token clients
+
+Both authentication methods access the same single operator-managed office.
+For clients that accept custom request headers, keep using `/mcp` with
+`Authorization: Bearer <OFFICE_MCP_TOKEN>`. Anonymous `/mcp` remains the public
+five-tool demo; a supplied invalid credential never falls back to demo.
+
+For ChatGPT, add `https://agents.hekmon.com/mcp/oauth` and select **OAuth**.
+Use automatic discovery and either CIMD or dynamic client registration; no
+manually entered client secret is needed. The server advertises protected
+resource metadata at `/.well-known/oauth-protected-resource/mcp` (with a root
+alias) and authorization-server metadata at `/.well-known/oauth-authorization-server`.
+When the authorization page opens on this site's origin, enter the management
+Token and approve access. It verifies the Token server-side and issues a separate
+OAuth credential to the client. Do not put the management Token in a URL,
+OAuth Client Secret field, or client registration metadata.
+
+The Cloudflare OAuth provider handles authorization code + S256 PKCE, CIMD,
+dynamic registration, browser-bound single-use consent, one-hour access tokens,
+30-day refresh grants and rotating refresh tokens. Revocation uses the advertised
+`revocation_endpoint` (the token endpoint), with `token` and `client_id` form fields.
+The `office:manage` scope permits all eight tools. The authorization page always
+asks for consent, shows the client and callback host, and never remembers the
+management Token in application browser storage. OAuth grants contain a hashed
+credential fingerprint rather than the management Token; rotating the management
+Token invalidates existing OAuth access and requires authorization again.
+
+Deployments require `OAUTH_KV` and a canonical HTTPS origin in `OAUTH_ISSUER`.
+Production and staging use separate KV namespaces, Durable Objects, issuers and
+management Tokens. `global_fetch_strictly_public` is required for CIMD SSRF
+protection. Configure staging's Token separately from production; never copy
+production `.dev.vars` into a staging upload. This is operator authorization,
+not a multi-user identity system, and creating an Agent still creates only a record.
 For retrying creates, use the same `agent_id` and read the existing record after
 `agent_exists`. Room assignment checks compatible activity and remaining
 capacity within the same storage transaction. There are at most 100 Agent

@@ -2,13 +2,19 @@ import type { ExecutionContext } from "@cloudflare/workers-types";
 import { mcpHandler } from "./mcp";
 import { demoOffice } from "./model";
 import { authorizeManaged, managedMcpHandler, type ManagedEnv } from "./managed-mcp";
+import { handleOAuthRequest, type OAuthEnv } from "./oauth";
 export { OfficeStore } from "./office-store";
 import { AdapterError, authorizeLive, readUpstreamConfig, readUpstreamOffice } from "./upstream-mcp";
-export interface Env extends ManagedEnv {ASSETS:{fetch(request:Request):Promise<Response>};}
+export interface Env extends ManagedEnv, OAuthEnv {ASSETS:{fetch(request:Request):Promise<Response>};}
 const headers={"X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer","X-Frame-Options":"DENY","Cache-Control":"no-store"};
 function json(data:unknown,status=200){return Response.json(data,{status,headers});}
 export default {
  async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
+  return await handleOAuthRequest(request, env, ctx, req => handleRequest(req, env, ctx, true))
+   ?? handleRequest(request, env, ctx);
+ }
+};
+async function handleRequest(request:Request,env:Env,ctx:ExecutionContext,oauthAuthenticated=false):Promise<Response>{
   const url=new URL(request.url);
   const origin=request.headers.get("Origin");
   if(origin&&origin!==url.origin)return json({error:"Origin not allowed"},403);
@@ -32,10 +38,10 @@ export default {
   if(url.pathname.startsWith("/api/"))return json({error:"Unknown endpoint; public server has no write API"},404);
   if(url.pathname==="/mcp"){
    let handler=mcpHandler;
-   if(request.headers.has("Authorization")){
+   if(oauthAuthenticated || request.headers.has("Authorization")){
     try {
-     if(!await authorizeManaged(request,env))return new Response(JSON.stringify({error:"unauthorized"}),{status:401,headers:{...headers,"Content-Type":"application/json","WWW-Authenticate":'Bearer realm="bit-office-managed"'}});
-     handler=managedMcpHandler(env);
+     if(!oauthAuthenticated && !await authorizeManaged(request,env))return new Response(JSON.stringify({error:"unauthorized"}),{status:401,headers:{...headers,"Content-Type":"application/json","WWW-Authenticate":'Bearer realm="bit-office-managed"'}});
+     handler=managedMcpHandler(env, request.headers.get("Authorization")?.replace(/^Bearer /i, ""), oauthAuthenticated);
     } catch(error){return json({error:error instanceof AdapterError?error.code:"not_configured"},503);}
    }
    if(!["POST","GET","DELETE"].includes(request.method))return json({error:"Method not allowed"},405);
@@ -59,5 +65,4 @@ export default {
   response.headers.set("Referrer-Policy","no-referrer");
   response.headers.set("X-Frame-Options","DENY");
   return response;
- }
-};
+}
