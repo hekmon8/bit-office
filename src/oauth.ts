@@ -47,6 +47,9 @@ async function authorizationPage(request: Request, env: Env & { OAUTH_PROVIDER: 
    const details = await oauth.describeConsent(parsed);
    const consent = await oauth.beginConsent(parsed);
    Object.entries(securityHeaders).forEach(([k, v]) => consent.headers.set(k, v));
+   // no-referrer makes Chromium send Origin: null on form POSTs. Preserve same-origin CSRF checks
+   // while still withholding the authorization URL when redirecting to an external client.
+   consent.headers.set("Referrer-Policy", "same-origin");
    // Chromium applies form-action to 302 redirects too. Only allow the validated callback origin.
    consent.headers.set("Content-Security-Policy", securityHeaders["Content-Security-Policy"].replace("form-action 'self'", `form-action 'self' ${new URL(parsed.redirectUri).origin}`));
    consent.headers.set("Content-Type", "text/html; charset=utf-8");

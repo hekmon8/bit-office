@@ -101,6 +101,7 @@ describe("OAuth and fixed Bearer Token coexistence", () => {
   const form = { handle: p.handle, token, decision: "approve" };
   expect((await s.formPost("/oauth/authorize", { ...form, token: "wrong" }, { Cookie: p.cookie })).status).toBe(401);
   expect((await s.formPost("/oauth/authorize", form, { Cookie: p.cookie, Origin: "https://evil.test" })).status).toBe(403);
+  expect((await s.formPost("/oauth/authorize", form, { Cookie: p.cookie, Origin: "null" })).status).toBe(403);
   expect((await s.formPost("/oauth/authorize", form)).status).toBe(400);
   expect((await s.formPost("/oauth/authorize", form, { Cookie: p.cookie })).status).toBe(302);
   expect((await s.formPost("/oauth/authorize", form, { Cookie: p.cookie })).status).toBe(400);
@@ -145,6 +146,7 @@ describe("OAuth and fixed Bearer Token coexistence", () => {
   expect(p.html).not.toContain("<script>"); expect(p.html).toContain("&#60;script&#62;"); expect(p.html).not.toContain(token);
   expect(p.response.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(p.response.headers.get("Content-Security-Policy")).toContain("form-action 'self' https://chatgpt.com");
+  expect(p.response.headers.get("Referrer-Policy")).toBe("same-origin");
  });
  it("invalidates OAuth access on operator Token rotation and rejects credential persistence", async () => {
   const s = setup(); const auth = await s.authorize();
