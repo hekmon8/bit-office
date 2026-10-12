@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import worker, { OfficeStore, type Env } from "../src/worker";
 import demo from "../src/demo-worker";
 import privateWorker from "../src/private-worker";
-import { privateSnapshot, displayedExecution } from "../src/viewer-client";
+import { privateSnapshot, displayedExecution, syncPrivateUnknownCount } from "../src/viewer-client";
 import { demoOffice } from "../src/model";
 vi.hoisted(() => { Object.assign(globalThis, { Cloudflare: { compatibilityFlags: { global_fetch_strictly_public: true } } }); });
 const origin = "https://private.test", token = "unit-test-private-office-credential-32-plus-chars";
@@ -70,6 +70,9 @@ describe("private read-only viewer sessions",()=>{
   expect((await s.rpc({Authorization:`Bearer ${c.split("=")[1]}`})).response.status).toBe(401);
   expect((await s.fetch("/api/viewer/state",{method:"POST",headers:{Cookie:c}})).status).toBe(405);expect(s.data.has("office")).toBe(false);
  });
+ it("uses a fixed-token challenge when the private instance has no OAuth binding",async()=>{
+  const s=setup(),r=await s.fetch("/mcp");expect(r.status).toBe(401);expect(r.headers.get("WWW-Authenticate")).toBe('Bearer realm="bit-office-managed"');
+ });
  it("keeps OAuth discovery reachable independently of viewer login",async()=>{
   const s=setup();expect((await s.fetch("/.well-known/oauth-authorization-server")).status).toBe(503);expect((await s.fetch("/mcp/oauth")).status).toBe(503);
   expect((await s.rpc({Authorization:`Bearer ${token}`})).body.result.tools).toHaveLength(8);
@@ -112,5 +115,16 @@ describe("private viewer data semantics",()=>{
   const a={...demoOffice().agents.find(a=>a.id==="mira")!,tasksComplete:false,tasksObservedAt:new Date().toISOString()};expect(displayedExecution(a,true,true).running).toBe(1);
   for(const stamp of [undefined,"invalid",new Date(Date.now()-120001).toISOString(),new Date(Date.now()+60000).toISOString()])expect(displayedExecution({...a,tasksObservedAt:stamp},true,true).label).toBe("未知");
   expect(displayedExecution(a,true,false).label).toBe("未知");expect(displayedExecution({...a,tasks:[]},true,true).label).toBe("未知");expect(displayedExecution({...a,tasks:[],tasksComplete:true},true,true).label).toBe("空闲");
+ });
+});
+
+describe("private status dialog freshness",()=>{
+ it("updates an open dialog counter after failed refresh, task-report expiry and recovery",()=>{
+  const now=Date.now(),a={...demoOffice().agents[0],tasks:[],tasksComplete:true,tasksObservedAt:new Date(now).toISOString()};
+  const counter={textContent:"old"};
+  syncPrivateUnknownCount(counter,[a],true,now);expect(counter.textContent).toBe("0 位成员任务状态未知");
+  syncPrivateUnknownCount(counter,[a],false,now);expect(counter.textContent).toBe("1 位成员任务状态未知");
+  syncPrivateUnknownCount(counter,[a],true,now+120001);expect(counter.textContent).toBe("1 位成员任务状态未知");
+  syncPrivateUnknownCount(counter,[{...a,tasksObservedAt:new Date(now+120001).toISOString()}],true,now+120001);expect(counter.textContent).toBe("0 位成员任务状态未知");
  });
 });

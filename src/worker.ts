@@ -54,7 +54,7 @@ async function handleRequest(request:Request,env:Env,ctx:ExecutionContext,oauthA
   if(url.pathname==="/api/demo/state")return request.method==="GET"?json(demoOffice()):json({error:"Read-only endpoint"},405);
   if(url.pathname.startsWith("/api/"))return json({error:"Unknown endpoint; public server has no write API"},404);
   if(url.pathname==="/mcp"){
-   if(env.INSTANCE_MODE==="private"&&!oauthAuthenticated&&!request.headers.has("Authorization"))return new Response(JSON.stringify({error:"unauthorized"}),{status:401,headers:{...headers,"Content-Type":"application/json","WWW-Authenticate":`Bearer resource_metadata="${env.OAUTH_ISSUER}/.well-known/oauth-protected-resource/mcp/oauth"`}});
+   if(env.INSTANCE_MODE==="private"&&!oauthAuthenticated&&!request.headers.has("Authorization"))return new Response(JSON.stringify({error:"unauthorized"}),{status:401,headers:{...headers,"Content-Type":"application/json","WWW-Authenticate":env.OAUTH_KV&&env.OAUTH_ISSUER?`Bearer resource_metadata="${env.OAUTH_ISSUER}/.well-known/oauth-protected-resource/mcp/oauth"`:'Bearer realm="bit-office-managed"'}});
    let handler=mcpHandler;
    if(oauthAuthenticated || request.headers.has("Authorization")){
     try {

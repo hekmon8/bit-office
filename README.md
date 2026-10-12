@@ -190,8 +190,10 @@ not refresh it. Reports older than two minutes yield `tasksFresh: false` and an
 unknown execution label, while retaining the reported counts. Offline activity cannot be combined
 with an online/heartbeat report. Task states are client reports, not
 provider-verified execution. Creating an Agent registers data and never starts
-a Codex/Claude process. The website still displays its labelled demo; private
-managed records are exposed only through authenticated MCP.
+a Codex/Claude process. The compatibility deployment still displays its labelled demo; its private
+managed records are exposed only through authenticated MCP. The dedicated private
+entrypoint also displays those records through its authenticated read-only viewer;
+see the dual-instance guide for its session and source boundaries.
 
 Managed snapshots use `mode: "live"`, `source: "managed"`; connection information
 reports `stateAuthority: "client_reports"` and `runtimeConnected: false`.
@@ -215,7 +217,10 @@ npm run check
 npm run deploy
 ```
 
-Cloudflare account authentication must already exist. This project needs only a Worker and static assets: no database, paid add-on, new application credential or GitHub Actions workflow.
+Cloudflare account authentication must already exist. The strict public demo needs a Worker and static assets. Managed/private offices
+use the existing SQLite Durable Object, and OAuth additionally uses its configured
+KV namespace. Deployment must preserve the intended bindings and existing data;
+this project does not create application credentials or paid subscriptions.
 
 Workers Builds configuration:
 

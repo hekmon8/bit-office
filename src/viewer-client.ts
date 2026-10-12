@@ -14,3 +14,8 @@ export function displayedExecution(agent: ViewerAgent, privateMode: boolean, rea
  if (privateMode && !fresh) execution.label = "未知";
  return execution;
 }
+
+/** Keep an already-open status dialog consistent with current read and report freshness. */
+export function syncPrivateUnknownCount(target: Pick<HTMLElement,"textContent"> | null, agents: ViewerAgent[], readFresh: boolean, now = Date.now()) {
+ if (target) target.textContent = `${agents.filter(a => displayedExecution(a,true,readFresh,now).label === "未知").length} 位成员任务状态未知`;
+}
