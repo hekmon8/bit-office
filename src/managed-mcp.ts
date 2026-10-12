@@ -11,7 +11,7 @@ export async function authorizeManaged(request: Request, env: ManagedEnv) {
  if ([env.LIVE_READ_TOKEN, env.UPSTREAM_MCP_TOKEN].includes(token)) throw new AdapterError("invalid_configuration", 503);
  return authorizeLive(request, { LIVE_READ_TOKEN: token });
 }
-export function managedMcpHandler(env: ManagedEnv, requestCredential?: string, oauth = false) {
+export function managedMcpHandler(env: ManagedEnv, requestCredential?: string, oauth = false, privateBrowser = false) {
  // A new handler is bound to this request's verified environment, never a shared credential cache.
  const read = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
  const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -55,7 +55,7 @@ export function managedMcpHandler(env: ManagedEnv, requestCredential?: string, o
   server.registerTool("get_task_handoff", { description: "Read explicitly reported task handoffs, not inferred runtime behavior.", inputSchema: { task_id: z.string().min(1).max(64) }, annotations: read, _meta: authMeta }, async ({ task_id }) => {
    const o = await snapshot(), task = o.agents.flatMap(a => a.tasks).find(t => t.id === task_id); return result({ mode: o.mode, source: o.source, task: task ?? null, hasHandoff: !!task?.delegatedFrom });
   });
-  server.registerTool("get_connection_info", { description: "Explain authentication, persistence and the limits of reported Agent state.", inputSchema: {}, annotations: read, _meta: authMeta }, async () => result({ mode: "live", source: "managed", transport: "streamable_http", readOnly: false, persistence: "durable_object", stateAuthority: "client_reports", runtimeConnected: false, browserSource: "synthetic", workspaceScope: "single_operator_office" }));
+  server.registerTool("get_connection_info", { description: "Explain authentication, persistence and the limits of reported Agent state.", inputSchema: {}, annotations: read, _meta: authMeta }, async () => result({ mode: "live", source: "managed", transport: "streamable_http", readOnly: false, persistence: "durable_object", stateAuthority: "client_reports", runtimeConnected: false, browserSource: privateBrowser ? "managed" : "synthetic", viewerReadOnly: privateBrowser, workspaceScope: "single_operator_office" }));
   server.registerTool("create_agent", { description: "Create a persistent Agent record with a caller-selected unique ID. Does not start an Agent runtime. Duplicate IDs return agent_exists without overwriting.", inputSchema: createAgentSchema, annotations: write, _meta: authMeta }, input => safeWrite("create_agent", input));
   server.registerTool("update_agent", { description: "Update Agent name/color using expected_revision from a read. Returns revision_conflict if another writer updated it.", inputSchema: updateAgentSchema, annotations: write, _meta: authMeta }, input => safeWrite("update_agent", input));
   server.registerTool("update_agent_status", { description: "Report activity, room, online state, heartbeat and optionally replace tasks. Activity is not execution. Unspecified fields are preserved; task replacement defaults to incomplete unless tasks_complete is given. Requires expected_revision.", inputSchema: updateStatusSchema, annotations: write, _meta: authMeta }, input => safeWrite("update_agent_status", input));

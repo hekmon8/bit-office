@@ -1,0 +1,12 @@
+{
+  "name": "bit-office-private",
+  "main": "src/private-worker.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": false,
+  "routes": [],
+  "assets": {"directory": "./dist", "binding": "ASSETS", "run_worker_first": true},
+  "observability": {"enabled": false},
+  "durable_objects": {"bindings": [{"name": "OFFICE", "class_name": "OfficeStore"}]},
+  "migrations": [{"tag": "v1-office-store", "new_sqlite_classes": ["OfficeStore"]}]
+}

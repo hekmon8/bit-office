@@ -2,6 +2,7 @@ import type { DurableObjectState } from "@cloudflare/workers-types";
 import { z } from "zod";
 import { activities, defaultRooms } from "./model";
 import { officeSnapshotSchema, taskSchema, type OfficeSnapshot } from "./office-adapter";
+import { viewerStore } from "./viewer-store";
 
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
 const name = z.string().trim().min(1).max(160);
@@ -37,6 +38,7 @@ export class OfficeStore {
  async fetch(request: Request): Promise<Response> {
   try {
    const path = new URL(request.url).pathname;
+   if (path === "/viewer-session") return await viewerStore(request, this.state);
    if (path === "/state" && request.method === "GET") {
     const stored = this.state.storage.kv.get<OfficeSnapshot>("office");
     return Response.json({ ...(stored ?? initialOffice(new Date().toISOString())), observedAt: new Date().toISOString() });

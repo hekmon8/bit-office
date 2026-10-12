@@ -6,6 +6,12 @@ Demo: https://agents.hekmon.com
 
 The original https://bit-office.macros-hekk.workers.dev address remains available.
 
+For a strict synthetic-only public demo and a separately protected personal office,
+see [the dual-instance guide](docs/dual-instances.md). It adds dedicated demo/private
+entrypoints and a private read-only viewer without changing the existing deployment
+or rewriting the OAuth implementation. Example configurations have no public routes
+and require an explicit origin/binding/credential handoff before activation.
+
 ## What runs here
 
 - Top-down office: meeting rooms, discussion room, desks, kitchen, fishing pond, charging nests.
