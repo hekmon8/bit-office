@@ -45,7 +45,7 @@ function setup() {
  };
  const begin = async (clientId: string, overrides: Record<string, string> = {}) => {
   const challenge = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const params = new URLSearchParams({ client_id: clientId, redirect_uri: redirect, response_type: "code", resource: origin + "/mcp", scope: "office:manage", state: "original-state", code_challenge: challenge, code_challenge_method: "S256", ...overrides });
+  const params = new URLSearchParams({ client_id: clientId, redirect_uri: redirect, response_type: "code", resource: origin + "/mcp/oauth", scope: "office:manage", state: "original-state", code_challenge: challenge, code_challenge_method: "S256", ...overrides });
   const response = await fetch("/oauth/authorize?" + params);
   const html = await response.text();
   const handle = html.match(/name="handle" value="([^"]+)"/)?.[1] ?? "";
@@ -58,7 +58,7 @@ function setup() {
   const approved = await formPost("/oauth/authorize", { handle: page.handle, token, decision: "approve" }, { Cookie: page.cookie });
   expect(approved.status).toBe(302);
   const callback = new URL(approved.headers.get("Location")!); expect(callback.searchParams.get("state")).toBe("original-state");
-  const exchange = { grant_type: "authorization_code", client_id: client.client_id, redirect_uri: redirect, code: callback.searchParams.get("code")!, code_verifier: verifier, resource: origin + "/mcp" };
+  const exchange = { grant_type: "authorization_code", client_id: client.client_id, redirect_uri: redirect, code: callback.searchParams.get("code")!, code_verifier: verifier, resource: origin + "/mcp/oauth" };
   const response = await formPost("/oauth/token", exchange); expect(response.status).toBe(200);
   return { client, page, exchange, tokens: await response.json() as any };
  };
@@ -68,9 +68,9 @@ function setup() {
 describe("OAuth and fixed Bearer Token coexistence", () => {
  it("discovers OAuth with PKCE, CIMD and DCR while preserving anonymous demo and fixed-token access", async () => {
   const s = setup(); const challenge = await s.rpc(); expect(challenge.response.status).toBe(401);
-  expect(challenge.response.headers.get("WWW-Authenticate")).toContain("/.well-known/oauth-protected-resource/mcp");
+  expect(challenge.response.headers.get("WWW-Authenticate")).toContain("/.well-known/oauth-protected-resource/mcp/oauth");
   const resource = await (await s.fetch("/.well-known/oauth-protected-resource")).json() as any;
-  expect(resource.resource).toBe(origin + "/mcp"); expect(resource.authorization_servers).toEqual([origin]);
+  expect(resource.resource).toBe(origin + "/mcp/oauth"); expect(resource.authorization_servers).toEqual([origin]);
   const metadata = await (await s.fetch("/.well-known/oauth-authorization-server")).json() as any;
   expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
   expect(metadata.client_id_metadata_document_supported).toBe(true);
@@ -89,7 +89,7 @@ describe("OAuth and fixed Bearer Token coexistence", () => {
   const updated = await s.rpc(token, "tools/call", { name: "update_agent_status", arguments: { agent_id: "oauth-agent", expected_revision: 1, activity: "working", heartbeat: true } }, "/mcp");
   expect(JSON.parse(updated.body.result.content[0].text).agent.revision).toBe(2);
   expect((await s.rpc(undefined, "tools/call", { name: "get_agent_state", arguments: { agent_id: "oauth-agent" } }, "/mcp")).body.result.isError).toBe(true);
-  const refreshed = await s.formPost("/oauth/token", { grant_type: "refresh_token", client_id: auth.client.client_id, refresh_token: auth.tokens.refresh_token, resource: origin + "/mcp" });
+  const refreshed = await s.formPost("/oauth/token", { grant_type: "refresh_token", client_id: auth.client.client_id, refresh_token: auth.tokens.refresh_token, resource: origin + "/mcp/oauth" });
   expect(refreshed.status).toBe(200); const next = await refreshed.json() as any;
   expect(next.refresh_token).not.toBe(auth.tokens.refresh_token); expect((await s.rpc(next.access_token)).response.status).toBe(200);
   expect((await s.formPost("/oauth/token", { token: next.refresh_token, client_id: auth.client.client_id })).status).toBe(200);
@@ -129,7 +129,7 @@ describe("OAuth and fixed Bearer Token coexistence", () => {
   const s = setup(); const client = (await s.register()).body; const page = await s.begin(client.client_id);
   const approved = await s.formPost("/oauth/authorize", { handle: page.handle, token, decision: "approve" }, { Cookie: page.cookie });
   const code = new URL(approved.headers.get("Location")!).searchParams.get("code")!;
-  const failed = await s.formPost("/oauth/token", { grant_type: "authorization_code", client_id: client.client_id, redirect_uri: redirect, code, code_verifier: "wrong-verifier-with-43-characters-at-least-123456", resource: origin + "/mcp" });
+  const failed = await s.formPost("/oauth/token", { grant_type: "authorization_code", client_id: client.client_id, redirect_uri: redirect, code, code_verifier: "wrong-verifier-with-43-characters-at-least-123456", resource: origin + "/mcp/oauth" });
   expect(failed.status).toBe(400); expect(await failed.json()).not.toHaveProperty("access_token");
  });
  it("enforces expiry and granted scopes on every MCP request", async () => {
@@ -144,6 +144,7 @@ describe("OAuth and fixed Bearer Token coexistence", () => {
   const s = setup(); const p = await s.begin((await s.register({ client_name: '<script>alert("x")</script>' })).body.client_id);
   expect(p.html).not.toContain("<script>"); expect(p.html).toContain("&#60;script&#62;"); expect(p.html).not.toContain(token);
   expect(p.response.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
+  expect(p.response.headers.get("Content-Security-Policy")).toContain("form-action 'self' https://chatgpt.com");
  });
  it("invalidates OAuth access on operator Token rotation and rejects credential persistence", async () => {
   const s = setup(); const auth = await s.authorize();
@@ -160,5 +161,13 @@ describe("OAuth and fixed Bearer Token coexistence", () => {
   s.env.OAUTH_KV = undefined; expect((await s.rpc()).response.status).toBe(503);
   expect((await s.rpc(token, "tools/list", {}, "/mcp")).response.status).toBe(200);
   s.env.OAUTH_ISSUER = "https://other.test"; expect((await s.fetch("/.well-known/oauth-authorization-server")).status).toBe(503);
+ });
+ it("keeps fixed Bearer clients working on alternate hosts independently of OAuth configuration", async () => {
+  const s = setup();
+  for (const issuer of [origin, "https://wrong.test", undefined]) {
+   s.env.OAUTH_ISSUER = issuer;
+   const response = await worker.fetch(new Request("https://alternate.test/mcp", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }), s.env, {} as never);
+   expect(response.status).toBe(200);
+  }
  });
 });

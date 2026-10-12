@@ -134,7 +134,7 @@ five-tool demo; a supplied invalid credential never falls back to demo.
 For ChatGPT, add `https://agents.hekmon.com/mcp/oauth` and select **OAuth**.
 Use automatic discovery and either CIMD or dynamic client registration; no
 manually entered client secret is needed. The server advertises protected
-resource metadata at `/.well-known/oauth-protected-resource/mcp` (with a root
+resource metadata at `/.well-known/oauth-protected-resource/mcp/oauth` (with a root
 alias) and authorization-server metadata at `/.well-known/oauth-authorization-server`.
 When the authorization page opens on this site's origin, enter the management
 Token and approve access. It verifies the Token server-side and issues a separate

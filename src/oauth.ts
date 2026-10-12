@@ -14,7 +14,7 @@ const securityHeaders = {
 const errorResponse = (error: string, status: number) => Response.json({ error }, { status, headers: securityHeaders });
 function tokenChallenge(issuer: string, error: string, status: number) {
  const response = errorResponse(error, status);
- response.headers.set("WWW-Authenticate", `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource/mcp", scope="${scope}", error="${error}"`);
+ response.headers.set("WWW-Authenticate", `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource/mcp/oauth", scope="${scope}", error="${error}"`);
  return response;
 }
 const escape = (value: string) => value.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
@@ -47,6 +47,8 @@ async function authorizationPage(request: Request, env: Env & { OAUTH_PROVIDER: 
    const details = await oauth.describeConsent(parsed);
    const consent = await oauth.beginConsent(parsed);
    Object.entries(securityHeaders).forEach(([k, v]) => consent.headers.set(k, v));
+   // Chromium applies form-action to 302 redirects too. Only allow the validated callback origin.
+   consent.headers.set("Content-Security-Policy", securityHeaders["Content-Security-Policy"].replace("form-action 'self'", `form-action 'self' ${new URL(parsed.redirectUri).origin}`));
    consent.headers.set("Content-Type", "text/html; charset=utf-8");
    return new Response(consentPage(details, consent.handle), { headers: consent.headers });
   }
@@ -91,24 +93,24 @@ async function authorizationPage(request: Request, env: Env & { OAUTH_PROVIDER: 
 export async function handleOAuthRequest(request: Request, env: Env, ctx: ExecutionContext,
  managed: (request: Request) => Promise<Response>): Promise<Response | null> {
  const url = new URL(request.url);
- const isMcp = url.pathname === "/mcp" || url.pathname === "/mcp/oauth";
+ const isMcp = url.pathname === "/mcp/oauth";
  const isOAuth = url.pathname.startsWith("/oauth/") || url.pathname.startsWith("/.well-known/oauth-") || url.pathname === "/mcp/oauth";
- if (!isOAuth && !(isMcp && request.headers.has("Authorization") && env.OAUTH_KV && env.OAUTH_ISSUER)) return null;
+ if (!isOAuth) return null;
  if (!env.OAUTH_KV || !env.OAUTH_ISSUER) return errorResponse("oauth_not_configured", 503);
  // A canonical configured origin binds every grant and token to this environment.
  let issuer: URL;
  try { issuer = new URL(env.OAUTH_ISSUER); } catch { return errorResponse("invalid_configuration", 503); }
- if (issuer.origin !== env.OAUTH_ISSUER || url.origin !== issuer.origin || (issuer.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(issuer.hostname))) return errorResponse("invalid_configuration", 503);
+ if (issuer.origin !== env.OAUTH_ISSUER || url.origin !== issuer.origin || !(issuer.protocol === "https:" || (issuer.protocol === "http:" && ["localhost", "127.0.0.1"].includes(issuer.hostname)))) return errorResponse("invalid_configuration", 503);
  const asMcp = (req: Request) => { const target = new URL(req.url); target.pathname = "/mcp"; return new Request(target, req); };
  if (isMcp && request.headers.has("Authorization")) {
   try {
-   if (await authorizeManaged(request, env)) return url.pathname === "/mcp" ? null : managed(asMcp(request));
+   if (await authorizeManaged(request, env)) return managed(asMcp(request));
   } catch { return errorResponse("not_configured", 503); }
  }
  const provider = new OAuthProvider<Env>({
-  apiRoute: "/mcp", authorizeEndpoint: "/oauth/authorize", tokenEndpoint: "/oauth/token",
+  apiRoute: "/mcp/oauth", authorizeEndpoint: "/oauth/authorize", tokenEndpoint: "/oauth/token",
   clientRegistrationEndpoint: "/oauth/register", clientIdMetadataDocumentEnabled: true,
-  resourceMetadata: { resource: `${issuer.origin}/mcp`, authorization_servers: [issuer.origin], resource_name: "Agents", bearer_methods_supported: ["header"] },
+  resourceMetadata: { resource: `${issuer.origin}/mcp/oauth`, authorization_servers: [issuer.origin], resource_name: "Agents", bearer_methods_supported: ["header"] },
   scopesSupported: [scope, "offline_access"], requiredScopes: [scope], accessTokenTTL: 3600, refreshTokenTTL: 2592000,
   apiHandler: { async fetch(req: Request, bindings: Env, context: ExecutionContext) {
    const verified = context as unknown as { auth: OAuthResourceAuth; props: { credentialFingerprint?: string } };
@@ -122,7 +124,7 @@ export async function handleOAuthRequest(request: Request, env: Env, ctx: Execut
   } }
  });
  if (url.pathname === "/.well-known/oauth-protected-resource") {
-  url.pathname += "/mcp"; request = new Request(url, request);
+  url.pathname += "/mcp/oauth"; request = new Request(url, request);
  }
  try { return await provider.fetch(request, { ...env }, ctx); }
  catch { return errorResponse("authorization_unavailable", 503); }
