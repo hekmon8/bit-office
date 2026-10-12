@@ -3,7 +3,8 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-08",
   "compatibility_flags": [
-    "nodejs_compat"
+    "nodejs_compat",
+    "global_fetch_strictly_public"
   ],
   "workers_dev": true,
   "assets": {
@@ -24,11 +25,15 @@
     "bindings": [{ "name": "OFFICE", "class_name": "OfficeStore" }]
   },
   "migrations": [{ "tag": "v1-office-store", "new_sqlite_classes": ["OfficeStore"] }],
+  "vars": { "OAUTH_ISSUER": "https://agents.hekmon.com" },
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "a06b3f77caaf466bb9ebc1df789b3037" }],
   "env": {
     "staging": {
       "name": "bit-office-staging",
       "workers_dev": true,
       "routes": [],
+      "vars": { "OAUTH_ISSUER": "https://bit-office-staging.macros-hekk.workers.dev" },
+      "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "5bd86696964d4bd983368f2d5335a9f9" }],
       "durable_objects": {
         "bindings": [{ "name": "OFFICE", "class_name": "OfficeStore" }]
       }
