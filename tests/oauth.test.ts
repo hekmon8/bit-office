@@ -66,6 +66,55 @@ function setup() {
 }
 
 describe("OAuth and fixed Bearer Token coexistence", () => {
+ it.each([403, 429, 503])("reports upstream metadata HTTP %s as unavailable without issuing consent or exposing upstream data", async status => {
+  const s = setup();
+  const upstream = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("upstream-private-diagnostic-canary", { status }));
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+   const p = await s.begin("https://cimd.test/client.json");
+   expect(p.response.status).toBe(503);
+   expect(JSON.parse(p.html)).toEqual({ error: "client_metadata_unavailable", error_description: "授权服务暂时无法获取客户端信息，请联系服务管理员。" });
+   expect(p.response.headers.get("Cache-Control")).toBe("no-store");
+   expect(p.response.headers.has("Location")).toBe(false); expect(p.cookie).toBe(""); expect(p.handle).toBe("");
+   expect(s.kv.size).toBe(0); expect(s.office.size).toBe(0);
+   expect(p.html).not.toContain("cimd.test"); expect(p.html).not.toContain("upstream-private-diagnostic-canary");
+   expect(upstream).toHaveBeenCalledOnce();
+   const headers = new Headers(upstream.mock.calls[0][1]?.headers);
+   expect(headers.get("User-Agent")).toContain("workers-oauth-provider/1.2.3");
+  } finally { upstream.mockRestore(); warning.mockRestore(); }
+ });
+ it("keeps missing or invalid metadata rejected as an invalid authorization request", async () => {
+  const s = setup();
+  const upstream = vi.spyOn(globalThis, "fetch");
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+   for (const response of [new Response("missing", { status: 404 }), Response.json({ client_id: "https://different.test/client.json", redirect_uris: [redirect], token_endpoint_auth_method: "none" })]) {
+    upstream.mockResolvedValue(response);
+    const p = await s.begin("https://cimd.test/client.json");
+    expect(p.response.status).toBe(400); expect(JSON.parse(p.html).error).toBe("invalid_authorization_request");
+    expect(p.cookie).toBe(""); expect(p.handle).toBe(""); expect(p.response.headers.has("Location")).toBe(false);
+   }
+   expect(s.kv.size).toBe(0); expect(s.office.size).toBe(0);
+  } finally { upstream.mockRestore(); warning.mockRestore(); }
+ });
+ it("completes the existing DCR flow with strict PKCE and resource checks while CIMD fetches are refused", async () => {
+  const s = setup();
+  const upstream = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("refused", { status: 403 }));
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+   expect((await s.begin("https://cimd.test/client.json")).response.status).toBe(503);
+   const client = (await s.register()).body;
+   const patches: Record<string, string>[] = [{ redirect_uri: "https://evil.test/callback" }, { code_challenge_method: "plain" }, { resource: "https://different.test/mcp/oauth" }];
+   for (const patch of patches) {
+    const denied = await s.begin(client.client_id, patch); expect(denied.response.status).toBe(400); expect(denied.handle).toBe("");
+   }
+   const auth = await s.authorize();
+   expect((await s.rpc(auth.tokens.access_token)).body.result.tools).toHaveLength(8);
+   const refreshed = await s.formPost("/oauth/token", { grant_type: "refresh_token", client_id: auth.client.client_id, refresh_token: auth.tokens.refresh_token, resource: origin + "/mcp/oauth" });
+   expect(refreshed.status).toBe(200);
+   expect(upstream).toHaveBeenCalledOnce();
+  } finally { upstream.mockRestore(); warning.mockRestore(); }
+ });
  it("discovers OAuth with PKCE, CIMD and DCR while preserving anonymous demo and fixed-token access", async () => {
   const s = setup(); const challenge = await s.rpc(); expect(challenge.response.status).toBe(401);
   expect(challenge.response.headers.get("WWW-Authenticate")).toContain("/.well-known/oauth-protected-resource/mcp/oauth");
