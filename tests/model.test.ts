@@ -1,5 +1,5 @@
 import {describe,it,expect} from "vitest";
-import {demoOffice,executionState,validateOffice,roomSlot,assignActivity} from "../src/model";
+import {demoOffice,defaultRooms,officeRooms,executionState,validateOffice,roomSlot,assignActivity} from "../src/model";
 describe("independent execution projection",()=>{
  it("keeps running, waiting and blocked facts together",()=>expect(executionState([{id:"a",title:"A",status:"running",blocked:true},{id:"b",title:"B",status:"dispatched"},{id:"c",title:"C",status:"waiting_local_directory"}],true,true)).toEqual({running:1,waiting:2,blocked:1,label:"运行"}));
  it("does not infer idle from incomplete or stale data",()=>{expect(executionState([],false,true).label).toBe("未知");expect(executionState([],true,false).label).toBe("未知");});
@@ -10,10 +10,19 @@ describe("independent execution projection",()=>{
 
 describe("room occupancy and placement",()=>{
  it("keeps every capacity slot and pet footprint within its room",()=>{
-  for(const r of demoOffice().rooms)for(let i=0;i<r.capacity;i++){
+  for(const r of defaultRooms())for(let i=0;i<r.capacity;i++){
    const p=roomSlot(r,i);expect(p.x-20).toBeGreaterThan(r.x);expect(p.x+50).toBeLessThan(r.x+r.w);
    expect(p.y-30).toBeGreaterThan(r.y+40);expect(p.y+40).toBeLessThan(r.y+r.h);
   }
+ });
+ it("keeps every area self-contained and never moves a member across zones",()=>{
+  const o=demoOffice(),atlas=o.agents.find(a=>a.id==="atlas")!;
+  expect(assignActivity(o,atlas,"working")).toBe(true);
+  expect(o.rooms.find(r=>r.id===atlas.roomId)!.zone).toBe(atlas.zone);
+  const company={...o,rooms:officeRooms()},stranger={...atlas,zone:"home"};
+  expect(assignActivity(company,stranger,"working")).toBe(false);
+  expect(stranger.roomId).toBe(atlas.roomId);
+  expect(officeRooms().every(r=>r.zone==="office")).toBe(true);
  });
  it("uses another meeting room when the first is full",()=>{
   const o=demoOffice(),first=o.rooms.find(r=>r.id==="meeting-a")!;first.capacity=3;

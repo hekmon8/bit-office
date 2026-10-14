@@ -16,8 +16,8 @@ canonical personal-office origin above.
 
 ## What runs here
 
-- Top-down office: meeting rooms, discussion room, desks, kitchen, fishing pond, charging nests.
-- Space-first desktop and mobile map with pan, zoom and pet / occupied-desk task details. Room lists, status, settings and MCP instructions open in dismissible dialogs with back navigation and focus restoration.
+- Top-down office: meeting rooms, discussion room, desks, kitchen, fishing pond, charging nests — one personal area and one company area for connected coding sessions.
+- Space-first desktop and mobile map with pan, zoom and pet / occupied-desk task details. The floor is split into named areas (personal / company), drawn as dashed bands that can be clicked, plus a zone switcher that fits one area to the viewport (`docs/images/zone-bands.png`). Room lists, status, settings and MCP instructions open in dismissible dialogs with back navigation and focus restoration.
 - Browser-only demo activity changes and bounded meeting-room expansion.
 - Five public read-only MCP tools returning **synthetic sample data only**.
 - Three authenticated Agent-management tools with persistent server storage and revision checks.
@@ -96,8 +96,9 @@ MCP is a transport, not a common office-data schema. The selected tool must acce
 
 - `mode`: `live` with `source: "mcp"` or `"managed"`, or `demo` with `source: "synthetic"`. Synthetic sources stay synthetic after connection.
 - `observedAt`: the source's ISO timestamp; not replaced by the adapter's read time.
-- `rooms`: `{ id, name, kind, topic, capacity, x, y, w, h }`, using the existing activity names (`working`, `meeting`, `discussing`, `resting`, `fishing`, `offline`).
-- `agents`: `{ id, name, color, activity, roomId, online, lastSeenAt, tasks, tasksComplete?, revision?, updatedAt?, tasksObservedAt? }`. `lastSeenAt` may be `null`; missing `tasksComplete` defaults to `false`, so an empty task list is unknown rather than idle.
+- `rooms`: `{ id, name, kind, topic, capacity, x, y, w, h, zone, columns? }`, using the existing activity names (`working`, `meeting`, `discussing`, `resting`, `fishing`, `offline`). `zone` names the area the room belongs to; `columns` overrides the pet grid when a room is unusually wide.
+- `zones`: `{ id, name, description, originY }[]`; rooms and agents must agree on their zone.
+- `agents`: `{ id, name, color, activity, roomId, zone, online, lastSeenAt, tasks, tasksComplete?, parentId?, depth?, retiredAt?, retireReason?, revision?, updatedAt?, tasksObservedAt? }`. `lastSeenAt` may be `null`; missing `tasksComplete` defaults to `false`, so an empty task list is unknown rather than idle. `parentId`/`depth` express delegation, `retiredAt` marks a soft-retired record outside the active capacity count.
 - `tasks`: `{ id, title, status, blocked?, delegatedFrom?, handoffNote?, updatedAt?, handoffAt? }`, using the task statuses in `src/model.ts`.
 - `events`: `{ at, message }[]`.
 
@@ -123,16 +124,32 @@ office, not per-user or per-workspace access control. Any holder of the manageme
 token can read and update all managed records.
 
 Authenticated clients see the original five read tools, now reading the managed
-store, plus these three write tools:
+store, plus these four write tools:
 
 | Tool | Arguments | Behavior |
 | --- | --- | --- |
-| `create_agent` | `agent_id`, `name`; optional `color`, `activity`, `room_id` | Registers a persistent record; duplicate IDs fail without overwriting. Defaults to offline, in an available offline room, with no heartbeat or tasks. |
+| `create_agent` | `agent_id`, `name`; optional `color`, `activity`, `room_id`, `zone_id`, `parent_id` | Registers a persistent record; duplicate IDs fail without overwriting. Defaults to offline, in an available offline room of the parent's zone (or the personal zone), with no heartbeat or tasks. `parent_id` links a delegated child and is depth-limited. |
 | `update_agent` | `agent_id`, `expected_revision`; `name` and/or `color` | Updates profile fields and increments the Agent revision. |
-| `update_agent_status` | `agent_id`, `expected_revision`; optional `activity`, `room_id`, `online`, `heartbeat`, `tasks`, `tasks_complete` | Reports status and optionally replaces the Agent's task list. |
+| `update_agent_status` | `agent_id`, `expected_revision`; optional `activity`, `room_id`, `zone_id`, `online`, `heartbeat`, `tasks`, `tasks_complete` | Reports status and optionally replaces the Agent's task list. |
+| `retire_agent` | `agent_id`, `expected_revision`; optional `reason`, `cascade` | Soft-retires the record: history stays readable through `get_agent_state`, but the record releases its room slot and stops counting toward the active-agent limit. `cascade` (default true) retires delegated children too. |
+
+### Zones, lineage and retirement
+
+The floor is split into named areas (`zones`). Room assignment is keyed by
+`(zone, activity)`, so a company session never shares a room with a personal
+record; `list_rooms` and `get_office_state` both return `zones`. A delegated
+child carries `parentId`/`depth` (chain limit 3) and is drawn as a child of the
+session that spawned it. `get_office_state` omits retired records unless
+`include_retired` is set, and always reports `retiredCount`. Retiring the parent
+of a child also retires the child, because a child cannot outlive its session.
 
 Read `get_agent_state` first and send `agent.revision` as `expected_revision`.
 A concurrent update returns `revision_conflict`; read again before retrying.
+`agent_limit`, `agent_retired`, `depth_limit`, `parent_not_found` and
+`parent_retired` describe the remaining refusal cases. `OFFICE_MAX_AGENTS`
+(default 300), `OFFICE_MAX_RECORDS` (default 400) and `OFFICE_MAX_DEPTH`
+(default 3) tune the budgets; once the record budget is exceeded the oldest
+retired records are pruned first.
 
 ### OAuth and Bearer Token clients
 

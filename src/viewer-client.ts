@@ -1,7 +1,7 @@
 import { adaptOffice } from "./office-adapter";
 import { executionState, type Agent, type Office } from "./model";
 export type ViewerAgent = Omit<Agent, "lastSeenAt"> & { lastSeenAt: string | null; tasksComplete?: boolean; tasksObservedAt?: string };
-export type ViewerOffice = Omit<Office, "mode" | "source" | "agents"> & { mode: "demo" | "live"; source: "synthetic" | "managed"; agents: ViewerAgent[] };
+export type ViewerOffice = Omit<Office, "mode" | "source" | "agents"> & { mode: "demo" | "live"; source: "synthetic" | "managed"; agents: ViewerAgent[]; retiredCount?: number };
 export function privateSnapshot(value: unknown): ViewerOffice {
  const snapshot = adaptOffice(value);
  if (snapshot.mode !== "live" || snapshot.source !== "managed") throw Error("invalid_private_snapshot");

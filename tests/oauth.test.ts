@@ -76,14 +76,14 @@ describe("OAuth and fixed Bearer Token coexistence", () => {
   expect(metadata.client_id_metadata_document_supported).toBe(true);
   expect(metadata.registration_endpoint).toBe(origin + "/oauth/register");
   expect((await s.rpc(undefined, "tools/list", {}, "/mcp")).body.result.tools).toHaveLength(5);
-  expect((await s.rpc(token)).body.result.tools).toHaveLength(8);
-  expect((await s.rpc(token, "tools/list", {}, "/mcp")).body.result.tools).toHaveLength(8);
+  expect((await s.rpc(token)).body.result.tools).toHaveLength(9);
+  expect((await s.rpc(token, "tools/list", {}, "/mcp")).body.result.tools).toHaveLength(9);
   expect((await s.rpc("wrong")).response.status).toBe(401);
  });
  it("completes consent, code exchange, managed writes, refresh and revocation using the real library", async () => {
   const s = setup(); const auth = await s.authorize(); const access = auth.tokens.access_token;
   expect(access).not.toBe(token); expect(auth.tokens.expires_in).toBe(3600);
-  expect((await s.rpc(access)).body.result.tools).toHaveLength(8);
+  expect((await s.rpc(access)).body.result.tools).toHaveLength(9);
   const created = await s.rpc(access, "tools/call", { name: "create_agent", arguments: { agent_id: "oauth-agent", name: "OAuth Agent" } });
   expect(JSON.parse(created.body.result.content[0].text).agent.id).toBe("oauth-agent");
   const updated = await s.rpc(token, "tools/call", { name: "update_agent_status", arguments: { agent_id: "oauth-agent", expected_revision: 1, activity: "working", heartbeat: true } }, "/mcp");
@@ -180,8 +180,8 @@ describe("private entrypoint keeps OAuth protocol separate from UI login",()=>{
   const s=setup("private");expect(await (await s.fetch("/")).text()).toContain("私人办公室");expect((await s.fetch("/api/viewer/state")).status).toBe(401);
   const meta=await s.fetch("/.well-known/oauth-authorization-server");expect(meta.status).toBe(200);
   expect((await s.rpc(undefined,"tools/list",{},"/mcp")).response.status).toBe(401);
-  const auth=await s.authorize();expect((await s.rpc(auth.tokens.access_token)).body.result.tools).toHaveLength(8);
+  const auth=await s.authorize();expect((await s.rpc(auth.tokens.access_token)).body.result.tools).toHaveLength(9);
   const refreshed=await s.formPost("/oauth/token",{grant_type:"refresh_token",client_id:auth.client.client_id,refresh_token:auth.tokens.refresh_token,resource:origin+"/mcp/oauth"});expect(refreshed.status).toBe(200);
-  expect((await s.rpc(token,"tools/list",{},"/mcp")).body.result.tools).toHaveLength(8);
+  expect((await s.rpc(token,"tools/list",{},"/mcp")).body.result.tools).toHaveLength(9);
  });
 });

@@ -106,7 +106,7 @@ describe("private read-only viewer sessions",()=>{
  });
  it("keeps OAuth discovery reachable independently of viewer login",async()=>{
   const s=setup();expect((await s.fetch("/.well-known/oauth-authorization-server")).status).toBe(503);expect((await s.fetch("/mcp/oauth")).status).toBe(503);
-  expect((await s.rpc({Authorization:`Bearer ${token}`})).body.result.tools).toHaveLength(8);
+  expect((await s.rpc({Authorization:`Bearer ${token}`})).body.result.tools).toHaveLength(9);
  });
  it("rejects wrong credentials, absent/foreign Origin and oversized or ambiguous forms",async()=>{
   const s=setup();expect((await s.login("wrong")).status).toBe(401);
