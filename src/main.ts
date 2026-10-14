@@ -1,7 +1,7 @@
 import "./style.css";
 import {privateSnapshot,displayedExecution,syncPrivateUnknownCount,type ViewerOffice,type ViewerAgent} from "./viewer-client";
 import { demoOffice, defaultZones, labels, activities, defaultZoneId, type Agent, type Room, type Activity, validateOffice, roomSlot, assignActivity } from "./model";
-import {readFreshness,layoutRoom,floorHeight,fitViewport,constrainPan,compactRoomLabel} from "./view";
+import {readFreshness,layoutRoom,floorHeight,fitViewport,fitRect,constrainPan,compactRoomLabel} from "./view";
 let office:ViewerOffice={mode:"demo",source:"synthetic",observedAt:new Date().toISOString(),agents:[],rooms:[],zones:defaultZones(),events:[]};
 let privateMode=false,mounted=false,oauthConfigured=false,focusZoneId:string|null=null;
 let filter:Activity|""="",zoom=1,dx=0,dy=0,simulating=false,simTimer:ReturnType<typeof setInterval>|undefined;
@@ -122,10 +122,9 @@ function focusZone(id:string|null){
  focusZoneId=id;
  if(id===null){zoom=1;dx=dy=0;resizeCamera();renderZoneSwitch();toast("已回到全图");return;}
  const b=zoneBounds(id);if(!b)return;
- const stage=$("#map-stage"),next=fitViewport(stage.clientWidth,stage.clientHeight,b.w+32,b.h+32);
- cameraWidth=next.width;cameraHeight=next.height;cameraScale=next.scale;
- zoom=Math.max(1,Math.min(maximumZoom(),next.scale));
- dx=cameraWidth/2-(b.x+b.w/2)*zoom;dy=cameraHeight/2-(b.y+b.h/2)*zoom;
+ const stage=$("#map-stage"),next=fitRect(stage.clientWidth,stage.clientHeight,{x:b.x,y:b.y,w:b.w+32,h:b.h+32},maximumZoom());
+ cameraWidth=next.cameraWidth;cameraHeight=next.cameraHeight;cameraScale=next.zoom;
+ zoom=next.zoom;dx=next.dx;dy=next.dy;
  $("#floor").setAttribute("viewBox",`0 0 ${cameraWidth} ${cameraHeight}`);
  updateTransform();renderZoneSwitch();
  toast(`已定位到${office.zones.find(z=>z.id===id)?.name??id}`);

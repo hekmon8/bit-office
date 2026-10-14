@@ -1,5 +1,5 @@
 import {describe,it,expect} from "vitest";
-import {readFreshness,layoutRoom} from "../src/view";
+import {readFreshness,layoutRoom,fitRect} from "../src/view";
 describe("source freshness stays separate from local demo activity",()=>{
  const now=Date.parse("2026-10-08T10:00:00Z");
  it("labels built-in fallback without claiming a successful server read",()=>{
@@ -67,5 +67,29 @@ describe("maximum-expansion overview labels",()=>{
   expect(compactRoomLabel("会议室 C",280*369/3380)).toEqual(["会议","室C"]);
   expect(compactRoomLabel("茶水间",205*369/3380)).toEqual(["茶","水","间"]);
   expect(compactRoomLabel("开放工位",430*369/3380)).toEqual(["开放工位"]);
+ });
+});
+
+describe("area focus keeps one zone navigable on a tall floor",()=>{
+ const company={x:14,y:942,w:1222,h:868},personal={x:14,y:8,w:1222,h:857};
+ it("fits the focused area into the stage and centers it",()=>{
+  const camera=fitRect(1408,748,company,4);
+  expect(camera.zoom).toBeGreaterThanOrEqual(1);
+  const centerX=(company.x+company.w/2)*camera.zoom+camera.dx,centerY=(company.y+company.h/2)*camera.zoom+camera.dy;
+  expect(centerX).toBeCloseTo(camera.cameraWidth/2,6);
+  expect(centerY).toBeCloseTo(camera.cameraHeight/2,6);
+  const top=company.y*camera.zoom+camera.dy,bottom=(company.y+company.h)*camera.zoom+camera.dy;
+  expect(top).toBeGreaterThanOrEqual(-0.001);
+  expect(bottom).toBeLessThanOrEqual(camera.cameraHeight+0.001);
+ });
+ it("never zooms below the full-floor scale and never past the caller's maximum",()=>{
+  const wide=fitRect(2400,600,personal,4);
+  expect(wide.zoom).toBeLessThanOrEqual(4);
+  expect(fitRect(120,90,company,4).zoom).toBe(1);
+  const tiny=fitRect(1408,748,{x:0,y:0,w:20,h:20},2);
+  expect(tiny.zoom).toBe(2);
+ });
+ it("moves the camera down for the lower area and up for the upper one",()=>{
+  expect(fitRect(1408,748,company,4).dy).toBeLessThan(fitRect(1408,748,personal,4).dy);
  });
 });
