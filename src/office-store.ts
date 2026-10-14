@@ -51,6 +51,21 @@ function initialOffice(now: string): OfficeSnapshot {
   rooms: defaultRooms().map(r => ({ ...r, topic: "" })), zones: defaultZones(), events: [] };
 }
 /**
+ * Lineage depth is derived, never trusted: a record whose parent is gone is a root again, so a
+ * stale chain can neither keep a retired tree alive nor leak into the delegation depth budget.
+ */
+function deriveDepth(agents: { id: string; parentId?: string | null; depth?: number }[]) {
+ for (let pass = 0; pass < 8; pass++) {
+  let changed = false;
+  for (const a of agents) {
+   const parent = a.parentId ? agents.find(p => p.id === a.parentId) : undefined;
+   const depth = parent ? (parent.depth ?? 0) + 1 : 0;
+   if (a.depth !== depth) { a.depth = depth; changed = true; }
+  }
+  if (!changed) break;
+ }
+}
+/**
  * Bring a stored snapshot up to the current code-owned catalog: rooms follow
  * the catalog (positions, capacity, zone) while their operator-editable topic
  * is preserved, and every record re-derives its zone from the room it sits in.
@@ -62,15 +77,7 @@ export function reconcileOffice(office: OfficeSnapshot, now = new Date().toISOSt
   const room = rooms.find(r => r.id === a.roomId) ?? rooms.find(r => r.kind === "offline" && r.zone === a.zone) ?? rooms.find(r => r.kind === "offline")!;
   return { ...a, roomId: room.id, zone: room.zone };
  });
- for (let pass = 0; pass < 8; pass++) {
-  let changed = false;
-  for (const a of agents) {
-   const parent = a.parentId ? agents.find(p => p.id === a.parentId) : undefined;
-   const depth = parent ? (parent.depth ?? 0) + 1 : undefined;
-   if (depth !== undefined && a.depth !== depth) { a.depth = depth; changed = true; }
-  }
-  if (!changed) break;
- }
+ deriveDepth(agents);
  return { ...office, agents, rooms, zones: defaultZones() };
 }
 /** The whole mutation, version precondition and capacity check share one SQLite transaction. */
@@ -108,6 +115,7 @@ export class OfficeStore {
     const office = reconcileOffice(stored ?? initialOffice(now), now);
     const { operation, input } = command.data;
     let agent = office.agents.find(a => a.id === input.agent_id);
+    let retiredRoot: (typeof office.agents)[number] | undefined;
     if (operation === "create_agent") {
      if (agent) throw new OfficeError("agent_exists");
      if (office.agents.filter(a => !a.retiredAt).length >= this.limits.agents) throw new OfficeError("agent_limit");
@@ -131,16 +139,12 @@ export class OfficeStore {
      } else if (operation === "retire_agent") {
       const cascade = input.cascade !== false;
       const targets = cascade ? office.agents.filter(a => a.id === agent!.id || this.isDescendant(office, a, agent!.id)) : [agent];
-      let retiredRoot: (typeof office.agents)[number] | undefined;
       for (const target of targets) {
        target.retiredAt = now; target.activity = "offline"; target.online = false;
        if (input.reason !== undefined) target.retireReason = input.reason;
        target.revision = (target.revision ?? 0) + 1; target.updatedAt = now;
        if (target.id === input.agent_id) retiredRoot = { ...target };
       }
-      this.prune(office);
-      // The record budget can evict the just-retired record itself; the reply still describes it.
-      agent = office.agents.find(a => a.id === input.agent_id) ?? retiredRoot!;
      } else {
       const activity = input.activity ?? agent.activity;
       const zoneId = input.zone_id ?? (input.room_id ? office.rooms.find(r => r.id === input.room_id)?.zone : undefined) ?? agent.zone;
@@ -158,8 +162,18 @@ export class OfficeStore {
      }
      if (operation !== "retire_agent") { agent.revision = (agent.revision ?? 0) + 1; agent.updatedAt = now; }
     }
+    // Retention runs where the record count can grow or history appears: a create must not push
+    // the snapshot past the record ceiling the schema accepts, and a retirement adds history.
+    // Ordinary heartbeats never touch the budget.
+    if (operation === "create_agent" || operation === "retire_agent") this.prune(office);
+    // Retention can evict the just-retired record itself; the reply still describes it.
+    if (operation === "retire_agent") agent = office.agents.find(a => a.id === input.agent_id) ?? retiredRoot!;
     const tasks = office.agents.flatMap(a => a.tasks);
-    if (tasks.some(t => t.delegatedFrom && (t.delegatedFrom === t.id || !tasks.some(parent => parent.id === t.delegatedFrom)))) throw new OfficeError("invalid_handoff", 400);
+    // Validate the handoff linkage of the tasks being written, not of stored ones: retention
+    // can drop a retired record together with the tasks it owned, so a stored reference may
+    // legitimately outlive its target and must not make every later write fail.
+    const submitted = "tasks" in input ? input.tasks : undefined;
+    if (submitted?.some(t => t.delegatedFrom && (t.delegatedFrom === t.id || !tasks.some(parent => parent.id === t.delegatedFrom)))) throw new OfficeError("invalid_handoff", 400);
     office.observedAt = now;
     office.events.unshift({ at: now, message: `${operation}: ${agent.name}` }); office.events = office.events.slice(0, 100);
     const parsed = officeSnapshotSchema.safeParse(office);
@@ -201,6 +215,10 @@ export class OfficeStore {
    const victim = removable()[0];
    if (!victim) throw new OfficeError("agent_limit");
    office.agents.splice(office.agents.indexOf(victim), 1);
+   // A record may not cite a parent that is gone: detach the kept children so the snapshot
+   // stays valid (the store refuses to read a snapshot whose lineage references dangle).
+   for (const child of office.agents) if (child.parentId === victim.id) delete child.parentId;
+   deriveDepth(office.agents);
   }
  }
 }

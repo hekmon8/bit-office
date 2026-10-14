@@ -231,10 +231,50 @@ describe("persistent authenticated Agent tools", () => {
 
  it("drops the oldest retired records once the record budget is exceeded", async () => {
   const s = setup({ OFFICE_MAX_RECORDS: "2" });
-  for (let i = 0; i < 3; i++) await s.call("create_agent", { agent_id: `r${i}`, name: `R${i}`, zone_id: "office", activity: "working" });
-  for (let i = 0; i < 3; i++) await s.call("retire_agent", { agent_id: `r${i}`, expected_revision: 1 });
+  for (let i = 0; i < 2; i++) await s.call("create_agent", { agent_id: `r${i}`, name: `R${i}`, zone_id: "office", activity: "working" });
+  for (let i = 0; i < 2; i++) await s.call("retire_agent", { agent_id: `r${i}`, expected_revision: 1 });
+  // Both records are retired, so the next record evicts the oldest history to stay within budget.
+  expect((await s.call("create_agent", { agent_id: "r2", name: "R2", zone_id: "office", activity: "working" })).body.result.isError).not.toBe(true);
   const kept = await s.call("get_office_state", { include_retired: true });
   expect(kept.value.agents.map((a: any) => a.id)).toEqual(["r1", "r2"]);
+  // With every record active there is nothing to evict, so the budget reports itself.
+  const tight = setup({ OFFICE_MAX_RECORDS: "1" });
+  await tight.call("create_agent", { agent_id: "only", name: "Only", zone_id: "office", activity: "working" });
+  expect((await tight.call("create_agent", { agent_id: "extra", name: "Extra", zone_id: "office", activity: "working" })).value.error).toBe("agent_limit");
+ });
+
+ it("keeps writing after retention drops a record whose task another record still cites", async () => {
+  const s = setup({ OFFICE_MAX_RECORDS: "2" });
+  await s.call("create_agent", { agent_id: "source", name: "Source" });
+  await s.call("update_agent_status", { agent_id: "source", expected_revision: 1, tasks: [{ id: "plan", title: "Plan", status: "running" }] });
+  await s.call("create_agent", { agent_id: "keeper", name: "Keeper" });
+  await s.call("update_agent_status", { agent_id: "keeper", expected_revision: 1, tasks: [{ id: "work", title: "Work", status: "running", delegatedFrom: "plan" }] });
+  // `source` is not keeper's parent, so retiring it leaves keeper active while retention
+  // evicts source — and the task it delegated — on the next create.
+  expect((await s.call("retire_agent", { agent_id: "source", expected_revision: 2 })).body.result.isError).not.toBe(true);
+  const created = await s.call("create_agent", { agent_id: "newcomer", name: "Newcomer" });
+  expect(created.body.result.isError).not.toBe(true);
+  expect((await s.call("get_office_state", { include_retired: true })).value.agents.map((a: any) => a.id)).toEqual(["keeper", "newcomer"]);
+  // The submitted list is still validated: a citation of a task that never existed is rejected.
+  expect((await s.call("update_agent_status", { agent_id: "keeper", expected_revision: 2, tasks: [{ id: "work", title: "Work", status: "running", delegatedFrom: "gone" }] })).value.error).toBe("invalid_handoff");
+ });
+
+ it("keeps the snapshot valid when retention evicts a retired parent", async () => {
+  const s = setup({ OFFICE_MAX_RECORDS: "2" });
+  await s.call("create_agent", { agent_id: "session", name: "Session" });
+  await s.call("create_agent", { agent_id: "helper", name: "Helper", parent_id: "session", activity: "discussing" });
+  // Retiring the session retires what it spawned, so both records are evictable.
+  expect((await s.call("retire_agent", { agent_id: "session", expected_revision: 1 })).body.result.isError).not.toBe(true);
+  // Retention drops the oldest retired record — the parent — while the child record stays.
+  const created = await s.call("create_agent", { agent_id: "newcomer", name: "Newcomer" });
+  expect(created.body.result.isError).not.toBe(true);
+  // Letting the kept record cite a parent that is gone would make every later read and write
+  // fail ("Inconsistent office snapshot"), so it is detached and re-derived as a root instead.
+  const kept = await s.call("get_office_state", { include_retired: true });
+  expect(kept.value.agents.map((a: any) => a.id)).toEqual(["helper", "newcomer"]);
+  expect(kept.value.agents[0]).toMatchObject({ id: "helper", depth: 0, retiredAt: expect.any(String) });
+  expect(kept.value.agents[0].parentId).toBeUndefined();
+  expect((await s.call("update_agent_status", { agent_id: "newcomer", expected_revision: 1, activity: "working", heartbeat: true })).body.result.isError).not.toBe(true);
  });
 
 });
