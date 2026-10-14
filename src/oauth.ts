@@ -87,6 +87,11 @@ async function authorizationPage(request: Request, env: Env & { OAUTH_PROVIDER: 
   approved.headers.set("Location", redirectTo);
   return new Response(null, { status: 302, headers: approved.headers });
  } catch (error) {
+  // The pinned SDK reports HTTP fetch failures separately from invalid metadata.
+  // Treat upstream refusal/rate limits/outages as dependency failures, never as consent.
+  if (error instanceof CimdFetchError && /^Failed to fetch client metadata: HTTP (403|429|5\d\d)$/.test(error.detail)) {
+   return Response.json({ error: "client_metadata_unavailable", error_description: "授权服务暂时无法获取客户端信息，请联系服务管理员。" }, { status: 503, headers: securityHeaders });
+  }
   if (error instanceof AuthorizationError || error instanceof CimdFetchError) return errorResponse("invalid_authorization_request", 400);
   return errorResponse("authorization_unavailable", 503);
  }
