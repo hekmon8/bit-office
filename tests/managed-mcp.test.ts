@@ -218,6 +218,16 @@ describe("persistent authenticated Agent tools", () => {
   expect(state.value.rooms).toHaveLength(defaultRooms().length);
   expect(state.value.zones.map((z: any) => z.id)).toEqual(["home", "office"]);
   expect((s.data.get("office") as any).rooms.some((r: any) => r.zone === "office")).toBe(true);
+  // The migrated records stay writable, and lineage/retirement work on top of them: the deployed
+  // office already holds snapshots written before zones existed, so the upgrade must not leave a
+  // read-only or unwritable store behind.
+  expect((await s.call("update_agent_status", { agent_id: "legacy", expected_revision: 1, activity: "working", heartbeat: true })).body.result.isError).not.toBe(true);
+  const child = await s.call("create_agent", { agent_id: "legacy-child", name: "Child", activity: "discussing", zone_id: "office", parent_id: "legacy" });
+  expect(child.body.result.isError).not.toBe(true);
+  expect(child.value.agent).toMatchObject({ id: "legacy-child", zone: "office", roomId: "office-discussion", depth: 1, parentId: "legacy" });
+  expect((await s.call("retire_agent", { agent_id: "legacy", expected_revision: 2, cascade: true })).body.result.isError).not.toBe(true);
+  expect((await s.call("get_agent_state", { agent_id: "legacy-child" })).value.agent.retiredAt).toBeTruthy();
+  expect((await s.call("get_office_state", { include_retired: true })).value.retiredCount).toBe(2);
  });
 
  it("honours the configured active-agent limit without blocking retirement", async () => {
