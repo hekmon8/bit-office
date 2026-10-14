@@ -2,15 +2,17 @@
 
 An original pixel-pet office floor plan, deployed on Cloudflare Workers with a **Streamable HTTP MCP** endpoint for public demo reads and authenticated Agent management.
 
-Demo: https://agents.hekmon.com
+Personal office after activation: https://agents.hekmon.com
 
-The original https://bit-office.macros-hekk.workers.dev address remains available.
+Public demo after separate deployment: https://bit-office-demo.macros-hekk.workers.dev
 
-For a strict synthetic-only public demo and a separately protected personal office,
-see [the dual-instance guide](docs/dual-instances.md). It adds dedicated demo/private
-entrypoints and a private read-only viewer without changing the existing deployment
-or rewriting the OAuth implementation. Example configurations have no public routes
-and require an explicit origin/binding/credential handoff before activation.
+The deployable `wrangler.jsonc` now selects the private read-only viewer and retains
+the existing Worker identity, Office data and OAuth bindings. `wrangler.demo.jsonc`
+selects a separate stateless public demo with assets only. These are deployment
+targets, not a claim that either activation has already occurred. See the
+[dual-instance guide](docs/dual-instances.md) for approval, staging and rollout.
+The original Workers.dev alias cannot establish a private viewer session; use the
+canonical personal-office origin above.
 
 ## What runs here
 
@@ -32,14 +34,16 @@ Requires Node 22.12+ and npm.
 npm ci
 npm run check
 npm run build
-npm run dev:worker
+npx wrangler dev --config wrangler.demo.jsonc
 ```
 
-Open http://localhost:8787. For UI hot reload, keep the Worker running and run `npm run dev` in another terminal. Vite proxies the demo API and MCP to the local Worker.
+Open http://localhost:8787 for the local synthetic demo. For UI hot reload, keep the Worker running and run `npm run dev` in another terminal. Vite proxies the demo API and MCP to the local Worker. `npm run dev:worker` instead starts the configured private entry; follow the dual-instance guide for disposable local credentials and its canonical origin.
 
 ## ChatGPT / MCP
 
-Endpoint: `https://agents.hekmon.com/mcp`.
+Public demo endpoint after deployment: `https://bit-office-demo.macros-hekk.workers.dev/mcp`.
+
+Personal management endpoint: `https://agents.hekmon.com/mcp/oauth`, using OAuth. It manages persistent reported records; the separately authenticated website is a read-only viewer. Private MCP rejects anonymous requests.
 
 The public demo does not require authentication because it exposes no private data. Configure a remote MCP app with the Streamable HTTP endpoint and “no authentication”, if your ChatGPT account / workspace permits it. Scan tools, then read the synthetic office state. Actual ChatGPT connection must be tested separately; a local MCP test is not that verification.
 

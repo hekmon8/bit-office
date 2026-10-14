@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import privateConfig from "../wrangler.jsonc?raw";
+import demoConfig from "../wrangler.demo.jsonc?raw";
 import worker, { OfficeStore, type Env } from "../src/worker";
 import demo from "../src/demo-worker";
 import privateWorker from "../src/private-worker";
@@ -27,6 +29,35 @@ function setup(host = origin, credential = token) {
 }
 const cookie = (r: Response) => r.headers.get("Set-Cookie")!.split(";")[0];
 afterEach(() => vi.useRealTimers());
+describe("deployable instance selection",()=>{
+ const config = (name: string) => JSON.parse(name==="wrangler.jsonc"?privateConfig:demoConfig);
+ const entries: Record<string,typeof worker> = {"src/worker.ts":worker,"src/private-worker.ts":privateWorker,"src/demo-worker.ts":demo};
+ it("the configured personal entry reads managed records only after login and denies reads after logout",async()=>{
+  const c=config("wrangler.jsonc"),s=setup();expect(c.main).toBe("src/private-worker.ts");
+  const selected=entries[c.main];const fetch=(path:string,init:RequestInit={})=>selected.fetch(s.request(path,init),s.env,{} as never);
+  expect(await (await fetch("/api/instance")).json()).toEqual({mode:"private",oauthConfigured:false});
+  expect(await (await fetch("/")).text()).toContain("私人办公室");expect((await fetch("/api/viewer/state")).status).toBe(401);
+  await s.rpc({Authorization:`Bearer ${token}`},"tools/call",{name:"create_agent",arguments:{agent_id:"configured-agent",name:"Configured fixture"}});
+  const logged=await fetch("/viewer/login",{method:"POST",headers:{Origin:origin,"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({credential:token})});expect(logged.status).toBe(303);
+  const cki=cookie(logged),state=await (await fetch("/api/viewer/state",{headers:{Cookie:cki}})).json() as any;
+  expect(state.source).toBe("managed");expect(state.agents.map((a:any)=>a.id)).toEqual(["configured-agent"]);expect((await fetch("/api/demo/state")).status).toBe(404);
+  expect((await fetch("/api/viewer/logout",{method:"POST",headers:{Origin:origin,Cookie:cki}})).status).toBe(303);
+  expect((await fetch("/api/viewer/state",{headers:{Cookie:cki}})).status).toBe(401);
+ });
+ it("retains production identity, Office class, OAuth binding and migration history while staging stays isolated",()=>{
+  const c=config("wrangler.jsonc");expect(c.name).toBe("bit-office");expect(c.routes).toEqual([{pattern:"agents.hekmon.com",custom_domain:true}]);
+  expect(c.durable_objects.bindings).toEqual([{name:"OFFICE",class_name:"OfficeStore"}]);expect(c.migrations).toEqual([{tag:"v1-office-store",new_sqlite_classes:["OfficeStore"]}]);
+  expect(c.kv_namespaces).toEqual([{binding:"OAUTH_KV",id:"a06b3f77caaf466bb9ebc1df789b3037"}]);expect(c.env.staging.routes).toEqual([]);expect(c.env.staging.name).toBe("bit-office-staging");expect(c.env.staging.kv_namespaces[0].id).not.toBe(c.kv_namespaces[0].id);
+ });
+ it("the configured public demo stays synthetic and read-only even when private bindings are passed",async()=>{
+  const c=config("wrangler.demo.jsonc"),s=setup();expect(c.main).toBe("src/demo-worker.ts");expect(c.name).toBe("bit-office-demo");expect(c.routes).toEqual([]);
+  for(const key of ["durable_objects","kv_namespaces","migrations","vars","env"])expect(c[key]).toBeUndefined();
+  const selected=entries[c.main];expect((await (await selected.fetch(s.request("/api/demo/state"),s.env,{} as never)).json() as any).source).toBe("synthetic");
+  const r=await selected.fetch(s.request("/mcp",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"create_agent",arguments:{agent_id:"must-not-exist",name:"Rejected"}}})}),s.env,{} as never);
+  const text=await r.text(),body=JSON.parse(text.startsWith("event:")?text.split("\n").find(l=>l.startsWith("data:"))!.slice(5):text);
+  expect(body.error.code).toBe(-32602);expect(s.officeFetch).not.toHaveBeenCalled();expect(s.data.has("office")).toBe(false);
+ });
+});
 describe("strict instance boundary",()=>{
  it.each(["/api/live/state","/api/viewer/state","/viewer/login","/mcp/oauth","/oauth/register","/.well-known/oauth-authorization-server"])("demo never enters private %s",async path=>{
   const s=setup();const r=await demo.fetch(s.request(path,{headers:{Authorization:`Bearer ${token}`}}),s.env,{} as never);
