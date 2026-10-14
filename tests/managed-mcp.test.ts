@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { DurableObjectState } from "@cloudflare/workers-types";
 import worker, { OfficeStore, type Env } from "../src/worker";
+import { officeSnapshotSchema } from "../src/office-adapter";
 import { defaultRooms } from "../src/model";
 const token = "managed-test-token-with-at-least-32-characters";
 function setup(limits: { OFFICE_MAX_AGENTS?: string; OFFICE_MAX_RECORDS?: string; OFFICE_MAX_DEPTH?: string } = {}) {
@@ -285,6 +286,84 @@ describe("persistent authenticated Agent tools", () => {
   expect(kept.value.agents[0]).toMatchObject({ id: "helper", depth: 0, retiredAt: expect.any(String) });
   expect(kept.value.agents[0].parentId).toBeUndefined();
   expect((await s.call("update_agent_status", { agent_id: "newcomer", expected_revision: 1, activity: "working", heartbeat: true })).body.result.isError).not.toBe(true);
+ });
+
+ it("keeps the stored snapshot self-consistent through randomised churn", async () => {
+  // A stored snapshot that stops satisfying the schema bricks the office: every later read and
+  // write fails with "Inconsistent office snapshot". The invariant checks below therefore run
+  // after every single operation, not only at the end, and include the storage budget and room
+  // occupancy that retention and placement are responsible for.
+  const activities = ["working", "meeting", "discussing", "resting", "fishing", "offline"];
+  const zones = ["home", "office"];
+  const limits = { OFFICE_MAX_AGENTS: "6", OFFICE_MAX_RECORDS: "8", OFFICE_MAX_DEPTH: "3" };
+  for (const initial of [20261014, 7]) {
+   let seed = initial;
+   const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+   const pick = <T>(items: T[]): T => items[Math.floor(rand() * items.length)];
+   const s = setup(limits);
+   const live: string[] = [];
+   const trace: string[] = [];
+   const fail = (step: number, why: string): never => {
+    throw new Error(`seed ${initial} step ${step}: ${why}\nlast operations:\n${trace.slice(-6).join("\n")}`);
+   };
+   let counter = 0;
+   const taskIds: string[] = [];
+   const taskStatus = ["queued", "dispatched", "waiting_local_directory", "running", "completed", "failed", "cancelled"];
+   for (let step = 0; step < 400; step++) {
+    if (step && step % 90 === 0) s.restart(); // the object is evicted and re-reads its storage
+    const roll = rand();
+    if (roll < 0.42 || !live.length) {
+     const id = `f${counter++}`;
+     const parent = live.length && rand() < 0.5 ? pick(live) : undefined;
+     const result = await s.call("create_agent", { agent_id: id, name: id, activity: pick(activities), zone_id: pick(zones), ...(parent ? { parent_id: parent } : {}) });
+     if (!result.body.result?.isError) live.push(id);
+     trace.push(`create ${id}${parent ? ` parent=${parent}` : ""} → ${result.value?.error ?? "ok"}`);
+    } else {
+     const id = pick(live);
+     const before = await s.call("get_agent_state", { agent_id: id });
+     const revision = before.value?.agent?.revision;
+     if (revision === undefined) { live.splice(live.indexOf(id), 1); continue; }
+     if (roll < 0.52) {
+      const result = await s.call("update_agent", { agent_id: id, expected_revision: revision, name: `${id}-renamed`, color: pick(["#8daff4", "#f4a88d", "#a8f48d"]) });
+      trace.push(`rename ${id} → ${result.value?.error ?? "ok"}`);
+     } else if (roll < 0.78) {
+      const tasks = rand() < 0.5 ? [] : Array.from({ length: 1 + Math.floor(rand() * 2) }, (_, index) => {
+       const taskId = `${id}-t${step}-${index}`;
+       // Half of the delegations cite a task that exists, half cite one that never did: the first
+       // must stay writable after retention drops its owner, the second must stay rejected.
+       const source = taskIds.length && rand() < 0.5 ? pick(taskIds) : undefined;
+       const cited = !source ? undefined : rand() < 0.8 ? source : `${source}-gone`;
+       return { id: taskId, title: `task ${taskId}`, status: pick(taskStatus), ...(cited ? { delegatedFrom: cited } : {}) };
+      });
+      const result = await s.call("update_agent_status", { agent_id: id, expected_revision: revision, activity: pick(activities), heartbeat: true, tasks, tasks_complete: rand() < 0.5 });
+      if (!result.body.result?.isError) for (const task of tasks) taskIds.push(task.id);
+      trace.push(`status ${id} (${tasks.length} tasks) → ${result.value?.error ?? "ok"}`);
+     } else {
+      const result = await s.call("retire_agent", { agent_id: id, expected_revision: revision, cascade: rand() < 0.5 });
+      trace.push(`retire ${id} → ${result.value?.error ?? "ok"}`);
+     }
+    }
+    const snapshot = s.data.get("office") as any;
+    if (snapshot) {
+     const parsed = officeSnapshotSchema.safeParse(snapshot);
+     if (!parsed.success) fail(step, `stored snapshot rejected: ${JSON.stringify(parsed.error.issues.slice(0, 3))}`);
+     const known = new Set<string>(snapshot.agents.map((agent: any) => agent.id));
+     for (const agent of snapshot.agents) {
+      if (agent.parentId && !known.has(agent.parentId)) fail(step, `${agent.id} cites a missing parent ${agent.parentId}`);
+      if (agent.parentId === agent.id) fail(step, `${agent.id} is its own parent`);
+     }
+     if (snapshot.agents.length > Number(limits.OFFICE_MAX_RECORDS)) fail(step, `record budget exceeded: ${snapshot.agents.length} records`);
+     const capacity = new Map<string, number>(snapshot.rooms.map((room: any) => [room.id, room.capacity]));
+     const occupancy = new Map<string, number>();
+     for (const agent of snapshot.agents) if (!agent.retiredAt && agent.roomId) occupancy.set(agent.roomId, (occupancy.get(agent.roomId) ?? 0) + 1);
+     for (const [roomId, count] of occupancy) if (count > (capacity.get(roomId) ?? 0)) fail(step, `room ${roomId} holds ${count} active records, capacity ${capacity.get(roomId)}`);
+    }
+    const readable = await s.call("get_office_state", { include_retired: true });
+    if (readable.body.result?.isError) fail(step, `get_office_state failed → ${JSON.stringify(readable.value)}`);
+   }
+   expect(live.length).toBeGreaterThan(0);
+   expect((await s.call("get_office_state", { include_retired: true })).body.result?.isError).not.toBe(true);
+  }
  });
 
 });
