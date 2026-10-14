@@ -37,6 +37,14 @@ npm run build
 npx wrangler dev --config wrangler.demo.jsonc
 ```
 
+After a deploy, the managed contract can be checked against the live endpoint
+(areas, delegation, soft retirement, instructions) — the script only creates
+records prefixed with `verify-` and retires them when it finishes:
+
+```sh
+BIT_OFFICE_MCP_TOKEN=<management token> node scripts/verify-live.mjs
+```
+
 Open http://localhost:8787 for the local synthetic demo. For UI hot reload, keep the Worker running and run `npm run dev` in another terminal. Vite proxies the demo API and MCP to the local Worker. `npm run dev:worker` instead starts the configured private entry; follow the dual-instance guide for disposable local credentials and its canonical origin.
 
 ## ChatGPT / MCP
