@@ -2,9 +2,17 @@
 
 An original pixel-pet office floor plan, deployed on Cloudflare Workers with a **Streamable HTTP MCP** endpoint for public demo reads and authenticated Agent management.
 
-Demo: https://agents.hekmon.com
+Personal office after activation: https://agents.hekmon.com
 
-The original https://bit-office.macros-hekk.workers.dev address remains available.
+Public demo after separate deployment: https://bit-office-demo.macros-hekk.workers.dev
+
+The deployable `wrangler.jsonc` now selects the private read-only viewer and retains
+the existing Worker identity, Office data and OAuth bindings. `wrangler.demo.jsonc`
+selects a separate stateless public demo with assets only. These are deployment
+targets, not a claim that either activation has already occurred. See the
+[dual-instance guide](docs/dual-instances.md) for approval, staging and rollout.
+The original Workers.dev alias cannot establish a private viewer session; use the
+canonical personal-office origin above.
 
 ## What runs here
 
@@ -26,14 +34,16 @@ Requires Node 22.12+ and npm.
 npm ci
 npm run check
 npm run build
-npm run dev:worker
+npx wrangler dev --config wrangler.demo.jsonc
 ```
 
-Open http://localhost:8787. For UI hot reload, keep the Worker running and run `npm run dev` in another terminal. Vite proxies the demo API and MCP to the local Worker.
+Open http://localhost:8787 for the local synthetic demo. For UI hot reload, keep the Worker running and run `npm run dev` in another terminal. Vite proxies the demo API and MCP to the local Worker. `npm run dev:worker` instead starts the configured private entry; follow the dual-instance guide for disposable local credentials and its canonical origin.
 
 ## ChatGPT / MCP
 
-Endpoint: `https://agents.hekmon.com/mcp`.
+Public demo endpoint after deployment: `https://bit-office-demo.macros-hekk.workers.dev/mcp`.
+
+Personal management endpoint: `https://agents.hekmon.com/mcp/oauth`, using OAuth. It manages persistent reported records; the separately authenticated website is a read-only viewer. Private MCP rejects anonymous requests.
 
 The public demo does not require authentication because it exposes no private data. Configure a remote MCP app with the Streamable HTTP endpoint and “no authentication”, if your ChatGPT account / workspace permits it. Scan tools, then read the synthetic office state. Actual ChatGPT connection must be tested separately; a local MCP test is not that verification.
 
@@ -184,8 +194,10 @@ not refresh it. Reports older than two minutes yield `tasksFresh: false` and an
 unknown execution label, while retaining the reported counts. Offline activity cannot be combined
 with an online/heartbeat report. Task states are client reports, not
 provider-verified execution. Creating an Agent registers data and never starts
-a Codex/Claude process. The website still displays its labelled demo; private
-managed records are exposed only through authenticated MCP.
+a Codex/Claude process. The compatibility deployment still displays its labelled demo; its private
+managed records are exposed only through authenticated MCP. The dedicated private
+entrypoint also displays those records through its authenticated read-only viewer;
+see the dual-instance guide for its session and source boundaries.
 
 Managed snapshots use `mode: "live"`, `source: "managed"`; connection information
 reports `stateAuthority: "client_reports"` and `runtimeConnected: false`.
@@ -209,7 +221,10 @@ npm run check
 npm run deploy
 ```
 
-Cloudflare account authentication must already exist. This project needs only a Worker and static assets: no database, paid add-on, new application credential or GitHub Actions workflow.
+Cloudflare account authentication must already exist. The strict public demo needs a Worker and static assets. Managed/private offices
+use the existing SQLite Durable Object, and OAuth additionally uses its configured
+KV namespace. Deployment must preserve the intended bindings and existing data;
+this project does not create application credentials or paid subscriptions.
 
 Workers Builds configuration:
 

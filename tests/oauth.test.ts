@@ -5,14 +5,14 @@ const origin = "https://office.test";
 const token = "test-office-token-with-at-least-32-characters";
 const verifier = "oauth-test-verifier-with-43-characters-at-least-1234";
 const redirect = "https://chatgpt.com/connector_platform/oauth/callback";
-function setup() {
+function setup(instanceMode?: "private") {
  const kv = new Map<string, { value: string; metadata?: unknown; expires?: number }>();
  const office = new Map<string, unknown>();
  const store = new OfficeStore({ storage: {
   kv: { get: (key: string) => structuredClone(office.get(key)), put: (key: string, value: unknown) => office.set(key, structuredClone(value)) },
   transactionSync: (fn: () => unknown) => fn()
  } } as never);
- const env = { OFFICE_MCP_TOKEN: token, OAUTH_ISSUER: origin, ASSETS: { fetch: async () => new Response("asset") },
+ const env = { INSTANCE_MODE: instanceMode, OFFICE_MCP_TOKEN: token, OAUTH_ISSUER: origin, ASSETS: { fetch: async () => new Response("asset") },
   OFFICE: { idFromName: () => "office", get: () => ({ fetch: (url: string, init?: RequestInit) => store.fetch(new Request(url, init)) }) },
   OAUTH_KV: {
    async get(key: string, options?: string | { type?: string }) {
@@ -171,5 +171,17 @@ describe("OAuth and fixed Bearer Token coexistence", () => {
    const response = await worker.fetch(new Request("https://alternate.test/mcp", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }), s.env, {} as never);
    expect(response.status).toBe(200);
   }
+ });
+});
+
+
+describe("private entrypoint keeps OAuth protocol separate from UI login",()=>{
+ it("allows discovery/PKCE/refresh without a viewer cookie while keeping UI and anonymous MCP private",async()=>{
+  const s=setup("private");expect(await (await s.fetch("/")).text()).toContain("私人办公室");expect((await s.fetch("/api/viewer/state")).status).toBe(401);
+  const meta=await s.fetch("/.well-known/oauth-authorization-server");expect(meta.status).toBe(200);
+  expect((await s.rpc(undefined,"tools/list",{},"/mcp")).response.status).toBe(401);
+  const auth=await s.authorize();expect((await s.rpc(auth.tokens.access_token)).body.result.tools).toHaveLength(8);
+  const refreshed=await s.formPost("/oauth/token",{grant_type:"refresh_token",client_id:auth.client.client_id,refresh_token:auth.tokens.refresh_token,resource:origin+"/mcp/oauth"});expect(refreshed.status).toBe(200);
+  expect((await s.rpc(token,"tools/list",{},"/mcp")).body.result.tools).toHaveLength(8);
  });
 });

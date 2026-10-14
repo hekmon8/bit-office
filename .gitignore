@@ -6,3 +6,4 @@ dist/
 !.env.example
 artifacts/
 .DS_Store
+wrangler.*.local.jsonc
