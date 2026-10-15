@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { DurableObjectState } from "@cloudflare/workers-types";
 import worker, { OfficeStore, type Env } from "../src/worker";
+import { officeSnapshotSchema } from "../src/office-adapter";
+import { defaultRooms } from "../src/model";
 const token = "managed-test-token-with-at-least-32-characters";
-function setup() {
+function setup(limits: { OFFICE_MAX_AGENTS?: string; OFFICE_MAX_RECORDS?: string; OFFICE_MAX_DEPTH?: string } = {}) {
  const data = new Map<string, unknown>();
  let failWrite = false;
  const storage = {
@@ -12,7 +14,7 @@ function setup() {
    try { return fn(); } catch (error) { data.clear(); for (const [k, v] of previous) data.set(k, v); throw error; }
   }
  };
- const makeStore = () => new OfficeStore({ storage } as unknown as DurableObjectState);
+ const makeStore = () => new OfficeStore({ storage } as unknown as DurableObjectState, limits);
  let store = makeStore(); let reads = 0;
  const env = { OFFICE_MCP_TOKEN: token, ASSETS: { fetch: async () => new Response("asset") }, OFFICE: {
   idFromName: () => "office", get: () => { reads++; return { fetch: (url: string, init?: RequestInit) => store.fetch(new Request(url, init)) }; }
@@ -38,10 +40,10 @@ describe("persistent authenticated Agent tools", () => {
   expect((await s.rpc("tools/list", {}, token, { LIVE_READ_TOKEN: token })).status).toBe(503);
   expect((await s.rpc("tools/list", {}, token, { UPSTREAM_MCP_TOKEN: token })).status).toBe(503);
  });
- it("exposes 8 tools only to authenticated clients, with accurate write annotations", async () => {
+ it("exposes 9 tools only to authenticated clients, with accurate write annotations", async () => {
   const s = setup();const managed = await s.rpc("tools/list");
-  expect(managed.body.result.tools).toHaveLength(8);
-  expect(managed.body.result.tools.filter((t: any) => !t.annotations.readOnlyHint).map((t: any) => t.name)).toEqual(["create_agent", "update_agent", "update_agent_status"]);
+  expect(managed.body.result.tools).toHaveLength(9);
+  expect(managed.body.result.tools.filter((t: any) => !t.annotations.readOnlyHint).map((t: any) => t.name)).toEqual(["create_agent", "update_agent", "update_agent_status", "retire_agent"]);
   const publicTools = await s.rpc("tools/list", {}, null); expect(publicTools.body.result.tools).toHaveLength(5);
   expect(publicTools.body.result.tools.every((t: any) => t.annotations.readOnlyHint)).toBe(true);
  });
@@ -142,7 +144,7 @@ describe("persistent authenticated Agent tools", () => {
  it("uses the current token on every request instead of caching credentials", async () => {
   const s = setup();const rotated = "rotated-token-with-at-least-32-characters";
   expect((await s.rpc("tools/list", {}, token, { OFFICE_MCP_TOKEN: rotated })).status).toBe(401);
-  expect((await s.rpc("tools/list", {}, rotated, { OFFICE_MCP_TOKEN: rotated })).body.result.tools).toHaveLength(8);
+  expect((await s.rpc("tools/list", {}, rotated, { OFFICE_MCP_TOKEN: rotated })).body.result.tools).toHaveLength(9);
  });
 
  it("preserves the entire snapshot when durable persistence fails, and permits a later retry", async () => {
@@ -153,6 +155,215 @@ describe("persistent authenticated Agent tools", () => {
   expect(s.data.get("office")).toEqual(before);
   expect((await s.call("get_agent_state", { agent_id: "one" })).value.agent).toMatchObject({ name: "Original", revision: 1 });
   expect((await s.call("update_agent", { agent_id: "one", expected_revision: 1, name: "Retried" })).value.agent.revision).toBe(2);
+ });
+
+ it("keeps the company area separate from the personal area", async () => {
+  const s = setup();
+  const personal = await s.call("create_agent", { agent_id: "home-1", name: "Home" });
+  expect(personal.value.agent).toMatchObject({ zone: "home", roomId: "nest" });
+  const work = await s.call("create_agent", { agent_id: "work-1", name: "Work", zone_id: "office", activity: "working" });
+  expect(work.value.agent).toMatchObject({ zone: "office", roomId: "office-desks" });
+  for (let i = 0; i < 4; i++) await s.call("create_agent", { agent_id: `extra${i}`, name: `Extra ${i}` });
+  expect((await s.call("create_agent", { agent_id: "overflow", name: "Overflow" })).value.error).toBe("room_full");
+  expect((await s.call("create_agent", { agent_id: "work-2", name: "Work 2", zone_id: "office", activity: "working" })).body.result.isError).not.toBe(true);
+  expect((await s.call("update_agent_status", { agent_id: "work-1", expected_revision: 1, zone_id: "home", room_id: "office-discussion" })).value.error).toBe("invalid_room");
+  expect((await s.call("update_agent_status", { agent_id: "work-1", expected_revision: 1, zone_id: "home" })).value.agent).toMatchObject({ zone: "home", roomId: "desks" });
+  const rooms = (await s.call("list_rooms", {})).value;
+  expect(rooms.zones.map((z: any) => z.id)).toEqual(["home", "office"]);
+  expect(rooms.rooms.find((r: any) => r.id === "office-desks").members.map((m: any) => m.id)).toEqual(["work-2"]);
+  expect(rooms.rooms.find((r: any) => r.id === "desks").members.map((m: any) => m.id)).toEqual(["work-1"]);
+ });
+
+ it("links delegated children to their session and enforces the depth limit", async () => {
+  const s = setup();
+  await s.call("create_agent", { agent_id: "sess", name: "Session", zone_id: "office", activity: "working" });
+  const child = await s.call("create_agent", { agent_id: "sub1", name: "Sub 1", parent_id: "sess", activity: "discussing" });
+  expect(child.value.agent).toMatchObject({ parentId: "sess", depth: 1, zone: "office", roomId: "office-discussion" });
+  await s.call("create_agent", { agent_id: "sub2", name: "Sub 2", parent_id: "sub1", activity: "discussing" });
+  await s.call("create_agent", { agent_id: "sub3", name: "Sub 3", parent_id: "sub2", activity: "discussing" });
+  expect((await s.call("create_agent", { agent_id: "sub4", name: "Sub 4", parent_id: "sub3", activity: "discussing" })).value.error).toBe("depth_limit");
+  expect((await s.call("create_agent", { agent_id: "orphan", name: "Orphan", parent_id: "ghost" })).value.error).toBe("parent_not_found");
+  const state = await s.call("get_office_state", {});
+  expect(state.value.agents.map((a: any) => [a.id, a.depth])).toEqual([["sess", 0], ["sub1", 1], ["sub2", 2], ["sub3", 3]]);
+  const discussion = (await s.call("list_rooms", {})).value.rooms.find((r: any) => r.id === "office-discussion");
+  expect(discussion.members.map((m: any) => m.parentId)).toEqual(["sess", "sub1", "sub2"]);
+ });
+
+ it("soft-retires a session and the children it spawned, releasing their slots", async () => {
+  const s = setup();
+  await s.call("create_agent", { agent_id: "sess", name: "Session", zone_id: "office", activity: "meeting" });
+  await s.call("create_agent", { agent_id: "sub1", name: "Sub 1", parent_id: "sess", activity: "discussing" });
+  for (let i = 0; i < 7; i++) await s.call("create_agent", { agent_id: `m${i}`, name: `M${i}`, zone_id: "office", activity: "meeting" });
+  expect((await s.call("create_agent", { agent_id: "m7", name: "M7", zone_id: "office", activity: "meeting" })).value.error).toBe("room_full");
+  const retired = await s.call("retire_agent", { agent_id: "sess", expected_revision: 1, reason: "session disposed" });
+  expect(retired.body.result.isError).not.toBe(true);
+  const state = await s.call("get_office_state", {});
+  expect(state.value.agents.some((a: any) => a.id === "sess" || a.id === "sub1")).toBe(false);
+  expect(state.value.retiredCount).toBe(2);
+  const kept = await s.call("get_office_state", { include_retired: true });
+  expect(kept.value.agents.filter((a: any) => a.retiredAt).map((a: any) => a.id).sort()).toEqual(["sess", "sub1"]);
+  expect(kept.value.agents.filter((a: any) => a.retiredAt).every((a: any) => a.activity === "offline" && a.online === false && a.retireReason === "session disposed")).toBe(true);
+  expect((await s.call("get_agent_state", { agent_id: "sub1" })).value.agent.retiredAt).toBeTruthy();
+  expect((await s.call("update_agent_status", { agent_id: "sess", expected_revision: 2, heartbeat: true })).value.error).toBe("agent_retired");
+  expect((await s.call("create_agent", { agent_id: "m7", name: "M7", zone_id: "office", activity: "meeting" })).body.result.isError).not.toBe(true);
+ });
+
+ it("migrates a legacy snapshot that predates zones", async () => {
+  const s = setup();
+  const at = new Date().toISOString();
+  s.data.set("office", { mode: "live", source: "managed", observedAt: at, events: [],
+   rooms: [{ id: "nest", name: "充电窝", kind: "offline", topic: "", capacity: 4, x: 990, y: 385, w: 230, h: 290 }],
+   agents: [{ id: "legacy", name: "Legacy", color: "#8daff4", activity: "offline", roomId: "nest", online: false, lastSeenAt: null, tasks: [], tasksComplete: false, revision: 1, updatedAt: at }] });
+  const state = await s.call("get_office_state", {});
+  expect(state.value.agents[0]).toMatchObject({ id: "legacy", zone: "home", roomId: "nest" });
+  expect(state.value.rooms).toHaveLength(defaultRooms().length);
+  expect(state.value.zones.map((z: any) => z.id)).toEqual(["home", "office"]);
+  expect((s.data.get("office") as any).rooms.some((r: any) => r.zone === "office")).toBe(true);
+  // The migrated records stay writable, and lineage/retirement work on top of them: the deployed
+  // office already holds snapshots written before zones existed, so the upgrade must not leave a
+  // read-only or unwritable store behind.
+  expect((await s.call("update_agent_status", { agent_id: "legacy", expected_revision: 1, activity: "working", heartbeat: true })).body.result.isError).not.toBe(true);
+  const child = await s.call("create_agent", { agent_id: "legacy-child", name: "Child", activity: "discussing", zone_id: "office", parent_id: "legacy" });
+  expect(child.body.result.isError).not.toBe(true);
+  expect(child.value.agent).toMatchObject({ id: "legacy-child", zone: "office", roomId: "office-discussion", depth: 1, parentId: "legacy" });
+  expect((await s.call("retire_agent", { agent_id: "legacy", expected_revision: 2, cascade: true })).body.result.isError).not.toBe(true);
+  expect((await s.call("get_agent_state", { agent_id: "legacy-child" })).value.agent.retiredAt).toBeTruthy();
+  expect((await s.call("get_office_state", { include_retired: true })).value.retiredCount).toBe(2);
+ });
+
+ it("honours the configured active-agent limit without blocking retirement", async () => {
+  const s = setup({ OFFICE_MAX_AGENTS: "2" });
+  await s.call("create_agent", { agent_id: "a1", name: "One", zone_id: "office", activity: "working" });
+  await s.call("create_agent", { agent_id: "a2", name: "Two", zone_id: "office", activity: "working" });
+  expect((await s.call("create_agent", { agent_id: "a3", name: "Three", zone_id: "office", activity: "working" })).value.error).toBe("agent_limit");
+  await s.call("retire_agent", { agent_id: "a1", expected_revision: 1 });
+  expect((await s.call("create_agent", { agent_id: "a3", name: "Three", zone_id: "office", activity: "working" })).body.result.isError).not.toBe(true);
+ });
+
+ it("drops the oldest retired records once the record budget is exceeded", async () => {
+  const s = setup({ OFFICE_MAX_RECORDS: "2" });
+  for (let i = 0; i < 2; i++) await s.call("create_agent", { agent_id: `r${i}`, name: `R${i}`, zone_id: "office", activity: "working" });
+  for (let i = 0; i < 2; i++) await s.call("retire_agent", { agent_id: `r${i}`, expected_revision: 1 });
+  // Both records are retired, so the next record evicts the oldest history to stay within budget.
+  expect((await s.call("create_agent", { agent_id: "r2", name: "R2", zone_id: "office", activity: "working" })).body.result.isError).not.toBe(true);
+  const kept = await s.call("get_office_state", { include_retired: true });
+  expect(kept.value.agents.map((a: any) => a.id)).toEqual(["r1", "r2"]);
+  // With every record active there is nothing to evict, so the budget reports itself.
+  const tight = setup({ OFFICE_MAX_RECORDS: "1" });
+  await tight.call("create_agent", { agent_id: "only", name: "Only", zone_id: "office", activity: "working" });
+  expect((await tight.call("create_agent", { agent_id: "extra", name: "Extra", zone_id: "office", activity: "working" })).value.error).toBe("agent_limit");
+ });
+
+ it("keeps writing after retention drops a record whose task another record still cites", async () => {
+  const s = setup({ OFFICE_MAX_RECORDS: "2" });
+  await s.call("create_agent", { agent_id: "source", name: "Source" });
+  await s.call("update_agent_status", { agent_id: "source", expected_revision: 1, tasks: [{ id: "plan", title: "Plan", status: "running" }] });
+  await s.call("create_agent", { agent_id: "keeper", name: "Keeper" });
+  await s.call("update_agent_status", { agent_id: "keeper", expected_revision: 1, tasks: [{ id: "work", title: "Work", status: "running", delegatedFrom: "plan" }] });
+  // `source` is not keeper's parent, so retiring it leaves keeper active while retention
+  // evicts source — and the task it delegated — on the next create.
+  expect((await s.call("retire_agent", { agent_id: "source", expected_revision: 2 })).body.result.isError).not.toBe(true);
+  const created = await s.call("create_agent", { agent_id: "newcomer", name: "Newcomer" });
+  expect(created.body.result.isError).not.toBe(true);
+  expect((await s.call("get_office_state", { include_retired: true })).value.agents.map((a: any) => a.id)).toEqual(["keeper", "newcomer"]);
+  // The submitted list is still validated: a citation of a task that never existed is rejected.
+  expect((await s.call("update_agent_status", { agent_id: "keeper", expected_revision: 2, tasks: [{ id: "work", title: "Work", status: "running", delegatedFrom: "gone" }] })).value.error).toBe("invalid_handoff");
+ });
+
+ it("keeps the snapshot valid when retention evicts a retired parent", async () => {
+  const s = setup({ OFFICE_MAX_RECORDS: "2" });
+  await s.call("create_agent", { agent_id: "session", name: "Session" });
+  await s.call("create_agent", { agent_id: "helper", name: "Helper", parent_id: "session", activity: "discussing" });
+  // Retiring the session retires what it spawned, so both records are evictable.
+  expect((await s.call("retire_agent", { agent_id: "session", expected_revision: 1 })).body.result.isError).not.toBe(true);
+  // Retention drops the oldest retired record — the parent — while the child record stays.
+  const created = await s.call("create_agent", { agent_id: "newcomer", name: "Newcomer" });
+  expect(created.body.result.isError).not.toBe(true);
+  // Letting the kept record cite a parent that is gone would make every later read and write
+  // fail ("Inconsistent office snapshot"), so it is detached and re-derived as a root instead.
+  const kept = await s.call("get_office_state", { include_retired: true });
+  expect(kept.value.agents.map((a: any) => a.id)).toEqual(["helper", "newcomer"]);
+  expect(kept.value.agents[0]).toMatchObject({ id: "helper", depth: 0, retiredAt: expect.any(String) });
+  expect(kept.value.agents[0].parentId).toBeUndefined();
+  expect((await s.call("update_agent_status", { agent_id: "newcomer", expected_revision: 1, activity: "working", heartbeat: true })).body.result.isError).not.toBe(true);
+ });
+
+ it("keeps the stored snapshot self-consistent through randomised churn", async () => {
+  // A stored snapshot that stops satisfying the schema bricks the office: every later read and
+  // write fails with "Inconsistent office snapshot". The invariant checks below therefore run
+  // after every single operation, not only at the end, and include the storage budget and room
+  // occupancy that retention and placement are responsible for.
+  const activities = ["working", "meeting", "discussing", "resting", "fishing", "offline"];
+  const zones = ["home", "office"];
+  const limits = { OFFICE_MAX_AGENTS: "6", OFFICE_MAX_RECORDS: "8", OFFICE_MAX_DEPTH: "3" };
+  for (const initial of [20261014, 7]) {
+   let seed = initial;
+   const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+   const pick = <T>(items: T[]): T => items[Math.floor(rand() * items.length)];
+   const s = setup(limits);
+   const live: string[] = [];
+   const trace: string[] = [];
+   const fail = (step: number, why: string): never => {
+    throw new Error(`seed ${initial} step ${step}: ${why}\nlast operations:\n${trace.slice(-6).join("\n")}`);
+   };
+   let counter = 0;
+   const taskIds: string[] = [];
+   const taskStatus = ["queued", "dispatched", "waiting_local_directory", "running", "completed", "failed", "cancelled"];
+   for (let step = 0; step < 400; step++) {
+    if (step && step % 90 === 0) s.restart(); // the object is evicted and re-reads its storage
+    const roll = rand();
+    if (roll < 0.42 || !live.length) {
+     const id = `f${counter++}`;
+     const parent = live.length && rand() < 0.5 ? pick(live) : undefined;
+     const result = await s.call("create_agent", { agent_id: id, name: id, activity: pick(activities), zone_id: pick(zones), ...(parent ? { parent_id: parent } : {}) });
+     if (!result.body.result?.isError) live.push(id);
+     trace.push(`create ${id}${parent ? ` parent=${parent}` : ""} → ${result.value?.error ?? "ok"}`);
+    } else {
+     const id = pick(live);
+     const before = await s.call("get_agent_state", { agent_id: id });
+     const revision = before.value?.agent?.revision;
+     if (revision === undefined) { live.splice(live.indexOf(id), 1); continue; }
+     if (roll < 0.52) {
+      const result = await s.call("update_agent", { agent_id: id, expected_revision: revision, name: `${id}-renamed`, color: pick(["#8daff4", "#f4a88d", "#a8f48d"]) });
+      trace.push(`rename ${id} → ${result.value?.error ?? "ok"}`);
+     } else if (roll < 0.78) {
+      const tasks = rand() < 0.5 ? [] : Array.from({ length: 1 + Math.floor(rand() * 2) }, (_, index) => {
+       const taskId = `${id}-t${step}-${index}`;
+       // Half of the delegations cite a task that exists, half cite one that never did: the first
+       // must stay writable after retention drops its owner, the second must stay rejected.
+       const source = taskIds.length && rand() < 0.5 ? pick(taskIds) : undefined;
+       const cited = !source ? undefined : rand() < 0.8 ? source : `${source}-gone`;
+       return { id: taskId, title: `task ${taskId}`, status: pick(taskStatus), ...(cited ? { delegatedFrom: cited } : {}) };
+      });
+      const result = await s.call("update_agent_status", { agent_id: id, expected_revision: revision, activity: pick(activities), heartbeat: true, tasks, tasks_complete: rand() < 0.5 });
+      if (!result.body.result?.isError) for (const task of tasks) taskIds.push(task.id);
+      trace.push(`status ${id} (${tasks.length} tasks) → ${result.value?.error ?? "ok"}`);
+     } else {
+      const result = await s.call("retire_agent", { agent_id: id, expected_revision: revision, cascade: rand() < 0.5 });
+      trace.push(`retire ${id} → ${result.value?.error ?? "ok"}`);
+     }
+    }
+    const snapshot = s.data.get("office") as any;
+    if (snapshot) {
+     const parsed = officeSnapshotSchema.safeParse(snapshot);
+     if (!parsed.success) fail(step, `stored snapshot rejected: ${JSON.stringify(parsed.error.issues.slice(0, 3))}`);
+     const known = new Set<string>(snapshot.agents.map((agent: any) => agent.id));
+     for (const agent of snapshot.agents) {
+      if (agent.parentId && !known.has(agent.parentId)) fail(step, `${agent.id} cites a missing parent ${agent.parentId}`);
+      if (agent.parentId === agent.id) fail(step, `${agent.id} is its own parent`);
+     }
+     if (snapshot.agents.length > Number(limits.OFFICE_MAX_RECORDS)) fail(step, `record budget exceeded: ${snapshot.agents.length} records`);
+     const capacity = new Map<string, number>(snapshot.rooms.map((room: any) => [room.id, room.capacity]));
+     const occupancy = new Map<string, number>();
+     for (const agent of snapshot.agents) if (!agent.retiredAt && agent.roomId) occupancy.set(agent.roomId, (occupancy.get(agent.roomId) ?? 0) + 1);
+     for (const [roomId, count] of occupancy) if (count > (capacity.get(roomId) ?? 0)) fail(step, `room ${roomId} holds ${count} active records, capacity ${capacity.get(roomId)}`);
+    }
+    const readable = await s.call("get_office_state", { include_retired: true });
+    if (readable.body.result?.isError) fail(step, `get_office_state failed → ${JSON.stringify(readable.value)}`);
+   }
+   expect(live.length).toBeGreaterThan(0);
+   expect((await s.call("get_office_state", { include_retired: true })).body.result?.isError).not.toBe(true);
+  }
  });
 
 });

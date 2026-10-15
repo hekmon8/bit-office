@@ -106,7 +106,7 @@ describe("private read-only viewer sessions",()=>{
  });
  it("keeps OAuth discovery reachable independently of viewer login",async()=>{
   const s=setup();expect((await s.fetch("/.well-known/oauth-authorization-server")).status).toBe(503);expect((await s.fetch("/mcp/oauth")).status).toBe(503);
-  expect((await s.rpc({Authorization:`Bearer ${token}`})).body.result.tools).toHaveLength(8);
+  expect((await s.rpc({Authorization:`Bearer ${token}`})).body.result.tools).toHaveLength(9);
  });
  it("rejects wrong credentials, absent/foreign Origin and oversized or ambiguous forms",async()=>{
   const s=setup();expect((await s.login("wrong")).status).toBe(401);
@@ -139,6 +139,28 @@ describe("private read-only viewer sessions",()=>{
  });
 });
 describe("private viewer data semantics",()=>{
+ it("keeps retired records off the private floor while reporting how many are hidden",async()=>{
+  const s=setup(),c=cookie(await s.login());
+  const call=async(name:string,args:Record<string,unknown>)=>{
+   const {response,body}=await s.rpc({Authorization:`Bearer ${token}`},"tools/call",{name,arguments:args});
+   expect(response.status).toBe(200);expect(body.error).toBeUndefined();
+   return JSON.parse(body.result.content[0].text) as any;
+  };
+  await call("create_agent",{agent_id:"session-live",name:"现场会话",zone_id:"office",activity:"working"});
+  await call("create_agent",{agent_id:"session-child",name:"子 agent",parent_id:"session-live",activity:"discussing"});
+  const visible=await (await s.fetch("/api/viewer/state",{headers:{Cookie:c}})).json() as any;
+  expect(visible.zones.map((z:any)=>z.id)).toEqual(["home","office"]);
+  expect(visible.rooms.every((r:any)=>typeof r.zone==="string")).toBe(true);
+  const placed=Object.fromEntries(visible.agents.map((a:any)=>[a.id,a]));
+  expect(placed["session-live"]).toMatchObject({zone:"office",roomId:"office-desks",depth:0});
+  expect(placed["session-child"]).toMatchObject({zone:"office",roomId:"office-discussion",depth:1,parentId:"session-live"});
+  expect(visible.retiredCount).toBe(0);
+  const {agent}=await call("get_agent_state",{agent_id:"session-live"});
+  await call("retire_agent",{agent_id:"session-live",expected_revision:agent.revision,reason:"session disposed"});
+  const after=await (await s.fetch("/api/viewer/state",{headers:{Cookie:c}})).json() as any;
+  expect(after.agents).toHaveLength(0);
+  expect(after.retiredCount).toBe(2);
+ });
  it("rejects synthetic fallback and strips unprojected fields",()=>{
   expect(()=>privateSnapshot(demoOffice())).toThrow("invalid_private_snapshot");const o=demoOffice();const agents=o.agents.map(a=>({...a,tasksComplete:false,privateSecret:"not-a-real-secret"}));const snapshot=privateSnapshot({...o,mode:"live",source:"managed",agents});expect(JSON.stringify(snapshot)).not.toContain("privateSecret");
  });

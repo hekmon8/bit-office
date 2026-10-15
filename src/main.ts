@@ -1,9 +1,9 @@
 import "./style.css";
 import {privateSnapshot,displayedExecution,syncPrivateUnknownCount,type ViewerOffice,type ViewerAgent} from "./viewer-client";
-import { demoOffice, labels, activities, type Agent, type Room, type Activity, validateOffice, roomSlot, assignActivity } from "./model";
-import {readFreshness,layoutRoom,floorHeight,fitViewport,constrainPan,compactRoomLabel} from "./view";
-let office:ViewerOffice={mode:"demo",source:"synthetic",observedAt:new Date().toISOString(),agents:[],rooms:[],events:[]};
-let privateMode=false,mounted=false,oauthConfigured=false;
+import { demoOffice, defaultZones, labels, activities, defaultZoneId, type Agent, type Room, type Activity, validateOffice, roomSlot, assignActivity } from "./model";
+import {readFreshness,layoutRoom,floorHeight,fitViewport,fitRect,constrainPan,compactRoomLabel} from "./view";
+let office:ViewerOffice={mode:"demo",source:"synthetic",observedAt:new Date().toISOString(),agents:[],rooms:[],zones:defaultZones(),events:[]};
+let privateMode=false,mounted=false,oauthConfigured=false,focusZoneId:string|null=null;
 let filter:Activity|""="",zoom=1,dx=0,dy=0,simulating=false,simTimer:ReturnType<typeof setInterval>|undefined;
 let lastSuccessfulReadAt:string|null=null;
 const $=<T extends Element=HTMLElement>(s:string)=>document.querySelector(s) as T;
@@ -19,7 +19,26 @@ function furniture(r:Room){
  if(r.kind==="fishing")return `<ellipse cx="${x+w/2}" cy="${y+h/2+7}" rx="67" ry="42" fill="#345e69" stroke="#638a86" stroke-width="8"/><path d="M${x+94} ${y+141}h25m-9 16h23" stroke="#78999e" stroke-width="2"/><rect x="${x+18}" y="${y+53}" width="88" height="28" rx="8" fill="#635b61"/><rect x="${x+w-55}" y="${y+50}" width="34" height="49" rx="4" fill="#454753"/>`;
  return [0,1].map(i=>`<rect x="${x+32+i*98}" y="${y+86}" width="65" height="136" rx="13" fill="#3b3e4d" stroke="#656475"/><rect x="${x+42+i*98}" y="${y+100}" width="45" height="28" rx="6" fill="#777080"/><rect x="${x+32+i*98}" y="${y+151}" width="65" height="71" rx="10" fill="#5c596c"/>`).join("");
 }
-function occupants(r:Room){return office.agents.filter(a=>a.roomId===r.id);}
+function occupants(r:Room){return office.agents.filter(a=>a.roomId===r.id&&!a.retiredAt);}
+function zoneMemberCount(zone:string){return office.agents.filter(a=>a.zone===zone&&!a.retiredAt).length;}
+function zoneLabel(zone:string){return office.zones.find(z=>z.id===zone)?.name??zone;}
+/** Delegation lineage of one record: the session that spawned it, and what it spawned. */
+function lineageSection(a:ViewerAgent){
+ const parent=a.parentId?office.agents.find(p=>p.id===a.parentId):undefined;
+ const children=office.agents.filter(c=>c.parentId===a.id);
+ if(!parent&&!children.length)return "";
+ const row=(x:ViewerAgent,role:string)=>`<button data-agent="${x.id}"><i style="background:${x.color}"></i>${escape(x.name)}<span>${role} · ${labels[x.activity]}</span>${icon("arrow")}</button>`;
+ return `<h3>委托关系</h3><div class="detail-agents">${parent?row(parent,"父会话"):""}${children.map(c=>row(c,"子 agent")).join("")}</div>`+(parent&&!children.length?'<p class="muted">这条记录是被父会话委托出来的子 agent。</p>':"");
+}
+function zoneRoomCount(zone:string){return office.rooms.filter(r=>r.zone===zone).length;}
+/** Display bounds of one area, used for the dashed zone band drawn under the rooms. */
+function zoneBounds(zone:string){
+ const rooms=office.rooms.filter(r=>r.zone===zone).map(layoutRoom);
+ if(!rooms.length)return null;
+ // The band only needs one label line above its rooms, and must stay inside the floor plate.
+ const x=Math.max(8,Math.min(...rooms.map(r=>r.x))-16),y=Math.max(8,Math.min(...rooms.map(r=>r.y))-22);
+ return {x,y,w:Math.max(...rooms.map(r=>r.x+r.w))-x+16,h:Math.max(...rooms.map(r=>r.y+r.h))-y+16};
+}
 function officeWidth(){return Math.max(1260,...office.rooms.map(r=>r.x+r.w+40));}
 function desk(r:Room,index:number){
  const {x,y}=roomSlot(r,index),a=occupants(r)[index];
@@ -27,9 +46,19 @@ function desk(r:Room,index:number){
 }
 function mapSVG(){
  const width=officeWidth(),height=floorHeight(office.rooms),rooms=office.rooms.map(layoutRoom);
+ const placed=rooms.flatMap(r=>occupants(r).map((a,i)=>{const p=roomSlot(r,i);return {a,x:p.x,y:p.y};})).filter(p=>!filter||p.a.activity===filter);
+ const lineage=placed.filter(p=>p.a.parentId).map(p=>{
+  const parent=placed.find(q=>q.a.id===p.a.parentId);
+  if(!parent)return "";
+  const mid=(parent.y+p.y)/2;
+  return `<path class="lineage" d="M${parent.x} ${parent.y-30}V${mid}H${p.x}V${p.y-30}" fill="none" stroke="#6f7c8c" stroke-width="2" stroke-dasharray="5 4"/>`;
+ }).join("");
+ const zones=office.zones.map(z=>{const b=zoneBounds(z.id);if(!b)return "";return `<g class="zone-band" role="button" tabindex="0" data-zone-focus="${z.id}" aria-label="定位到${escape(z.name)}"><rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="10" fill="#22262b" stroke="#51565f" stroke-width="2" stroke-dasharray="10 8"/><text x="${b.x+14}" y="${b.y+21}" class="zone-name">${escape(z.name)}<tspan class="zone-topic"> · ${escape(z.description)}</tspan></text><text x="${b.x+b.w-14}" y="${b.y+21}" text-anchor="end" class="zone-meta">${zoneRoomCount(z.id)} 间房 · ${zoneMemberCount(z.id)} 位成员</text></g>`;}).join("");
  return `<svg id="floor" viewBox="0 0 ${width} ${height}" aria-label="Bit 小屋 Agent 工作空间" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="tiles" width="22" height="22" patternUnits="userSpaceOnUse"><path d="M22 0H0V22" fill="none" stroke="#353a40" stroke-width=".5"/></pattern></defs><g id="floor-content" transform="translate(${dx} ${dy}) scale(${zoom})"><rect x="8" y="8" width="${width-16}" height="${height-25}" rx="8" fill="#252a2f" stroke="#62676e" stroke-width="8"/><rect x="16" y="363" width="${width-32}" height="77" fill="url(#tiles)"/><path d="M80 405H${width-50}" stroke="#464b50" stroke-dasharray="8 9"/><text x="89" y="393" class="corridor-label">走廊</text><path d="M15 373v58m0 -4h52m-52 -52a52 52 0 0 1 52 52" fill="none" stroke="#858377" stroke-width="2"/><text x="28" y="414" class="tiny">入口</text>
+ ${zones}
  ${rooms.map(r=>`<g class="room-shape"><rect class="room-hit" role="button" tabindex="0" data-room="${r.id}" aria-label="${escape(r.name)}，${occupants(r).length}/${r.capacity}" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="3" fill="${r.kind==="meeting"?"#2e2d37":r.kind==="discussing"?"#31342e":r.kind==="fishing"?"#263338":r.kind==="offline"?"#282b34":"#303333"}" stroke="#65676b" stroke-width="5"/><g class="room-decoration" aria-hidden="true"><path d="M${r.x+30} ${r.y+5}h${Math.min(r.w-60,120)}" stroke="#658591" stroke-width="4"/><text x="${r.x+18}" y="${r.y+35}" class="room-name">${escape(r.name)}</text><text x="${r.x+r.w-18}" y="${r.y+35}" text-anchor="end" class="room-count">${occupants(r).length}/${r.capacity}</text>${r.kind==="working"?"":furniture(r)}<path d="M${r.x+r.w/2-24} ${r.y<300?r.y+r.h:r.y}h48" stroke="#252a2f" stroke-width="7"/><path d="M${r.x+r.w/2-24} ${r.y<300?r.y+r.h:r.y}v${r.y<300?-40:40}m0 0a40 40 0 0 1 40 ${r.y<300?40:-40}" stroke="#9a9185" stroke-width="1.5" fill="none"/></g>${r.kind==="working"?Array.from({length:r.capacity},(_,i)=>desk(r,i)).join(""):""}</g>`).join("")}
- ${rooms.flatMap(r=>occupants(r).map((a,i)=>{const {x,y}=roomSlot(r,i);return filter&&a.activity!==filter?"":bit(a,x,y);})).join("")}
+ ${lineage}
+ ${placed.map(p=>bit(p.a,p.x,p.y)).join("")}
  ${privateMode?"":`<g class="expand-hit" role="button" tabindex="0" data-view="expand" aria-label="扩建示例会议室"><rect x="990" y="30" width="230" height="324" rx="3" fill="transparent" stroke="#484e58" stroke-dasharray="6 5"/><path d="M1085 192h40m-20-20v40" stroke="#555e6b" stroke-width="2"/></g>`}</g></svg>`;
 }
 
@@ -68,7 +97,7 @@ function renderStatus(){
 }
 function mount(){
  mounted=true;
- $("#app").innerHTML=`<header class="app-header"><div class="brand"><span class="brand-bit" aria-hidden="true">▟</span><h1>Bit 小屋</h1></div><nav aria-label="办公室工具">${iconButton("open-rooms","rooms","房间与成员")}${iconButton("open-mcp","mcp","MCP 接入")}${iconButton("open-settings","settings","设置与说明")}</nav></header><main class="office-canvas" aria-label="Agent 工作空间"><div id="map-stage" tabindex="0" aria-label="工作空间：拖动平移，方向键平移，加减键缩放，Home 适配全图"></div><div class="canvas-bottom"><button id="office-status" class="status-pill" aria-haspopup="dialog"></button><div class="camera-tools" aria-label="视图控制">${iconButton("zoom-out","minus","缩小工作空间")}${iconButton("reset-view","fit","适配全图")}${iconButton("zoom-in","plus","放大工作空间")}</div></div></main><dialog id="detail" aria-labelledby="detail-title"><div class="dialog-head">${iconButton("back-detail","back","返回上一层")}<span id="dialog-source">${privateMode?"私有 · 客户端上报":"BIT OFFICE / 合成示例"}</span>${iconButton("close-detail","close","关闭窗口，返回工作空间")}</div><div id="detail-content"></div></dialog><div id="toast" role="status"></div>`;
+ $("#app").innerHTML=`<header class="app-header"><div class="brand"><span class="brand-bit" aria-hidden="true">▟</span><h1>Bit 小屋</h1></div><nav aria-label="办公室工具">${iconButton("open-rooms","rooms","房间与成员")}${iconButton("open-mcp","mcp","MCP 接入")}${iconButton("open-settings","settings","设置与说明")}</nav></header><main class="office-canvas" aria-label="Agent 工作空间"><div id="map-stage" tabindex="0" aria-label="工作空间：拖动平移，方向键平移，加减键缩放，Home 适配全图"></div><div class="canvas-bottom"><button id="office-status" class="status-pill" aria-haspopup="dialog"></button><div id="zone-switch" class="zone-switch" role="group" aria-label="区域切换"></div><div class="camera-tools" aria-label="视图控制">${iconButton("zoom-out","minus","缩小工作空间")}${iconButton("reset-view","fit","适配全图")}${iconButton("zoom-in","plus","放大工作空间")}</div></div></main><dialog id="detail" aria-labelledby="detail-title"><div class="dialog-head">${iconButton("back-detail","back","返回上一层")}<span id="dialog-source">${privateMode?"私有 · 客户端上报":"BIT OFFICE / 合成示例"}</span>${iconButton("close-detail","close","关闭窗口，返回工作空间")}</div><div id="detail-content"></div></dialog><div id="toast" role="status"></div>`;
  $("#open-rooms").onclick=()=>openView({kind:"rooms"});$("#open-settings").onclick=()=>openView({kind:"settings"});$("#open-mcp").onclick=()=>openView({kind:"mcp"});$("#office-status").onclick=()=>openView({kind:"status"});
  $("#close-detail").onclick=closeViews;$("#back-detail").onclick=backView;
  const dialog=$<HTMLDialogElement>("#detail");dialog.addEventListener("cancel",e=>{e.preventDefault();closeViews();});
@@ -79,7 +108,26 @@ function mount(){
  window.addEventListener("focus",renderStatus);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")renderStatus();});
 }
 function renderOffice(){
- const focused=focusKey(document.activeElement);$("#map-stage").innerHTML=mapSVG();lastLabelScale=0;resizeCamera();bindTargets($("#map-stage"));renderStatus();if(focused&&!$<HTMLDialogElement>("#detail").open)restoreFocus(focused);
+ const focused=focusKey(document.activeElement);$("#map-stage").innerHTML=mapSVG();lastLabelScale=0;resizeCamera();bindTargets($("#map-stage"));renderZoneSwitch();renderStatus();if(focused&&!$<HTMLDialogElement>("#detail").open)restoreFocus(focused);
+}
+/** Areas are separate rooms of the same floor: offer an explicit switcher next to the camera tools. */
+function renderZoneSwitch(){
+ const zones=office.zones.filter(z=>zoneBounds(z.id));
+ const host=$("#zone-switch");
+ host.innerHTML=zones.length>1?`<button data-zone-focus="" aria-pressed="${focusZoneId===null}">全图</button>${zones.map(z=>`<button data-zone-focus="${z.id}" aria-pressed="${focusZoneId===z.id}">${escape(z.name)}</button>`).join("")}`:"";
+ bindTargets(host);
+}
+/** Center and fit one area, so a tall two-area floor stays navigable. */
+function focusZone(id:string|null){
+ focusZoneId=id;
+ if(id===null){zoom=1;dx=dy=0;resizeCamera();renderZoneSwitch();toast("已回到全图");return;}
+ const b=zoneBounds(id);if(!b)return;
+ const stage=$("#map-stage"),next=fitRect(stage.clientWidth,stage.clientHeight,{x:b.x,y:b.y,w:b.w+32,h:b.h+32},maximumZoom());
+ cameraWidth=next.cameraWidth;cameraHeight=next.cameraHeight;cameraScale=next.zoom;
+ zoom=next.zoom;dx=next.dx;dy=next.dy;
+ $("#floor").setAttribute("viewBox",`0 0 ${cameraWidth} ${cameraHeight}`);
+ updateTransform();renderZoneSwitch();
+ toast(`已定位到${office.zones.find(z=>z.id===id)?.name??id}`);
 }
 function resizeCamera(){
  const stage=$("#map-stage"),cx=(cameraWidth/2-dx)/zoom,cy=(cameraHeight/2-dy)/zoom;
@@ -100,6 +148,7 @@ function updateTransform(){
   lastLabelScale=unit;
   floor.style.setProperty("--room-label-size",`${Math.max(14,10/unit)}px`);
   floor.style.setProperty("--room-count-size",`${Math.max(11,8/unit)}px`);
+  floor.style.setProperty("--zone-label-size",`${Math.max(17,13/unit)}px`);
   const compactRooms=new Set<string>();
   floor.querySelectorAll<SVGGElement>(".room-shape").forEach(group=>{
    const id=group.querySelector("[data-room]")!.getAttribute("data-room")!,r=layoutRoom(office.rooms.find(r=>r.id===id)!);
@@ -142,7 +191,7 @@ function bindCanvas(){
  stage.addEventListener("focusin",e=>{const el=e.target as SVGGraphicsElement;if(el===stage as unknown as SVGGraphicsElement||!el.closest("[data-room],[data-agent],[data-desk],[data-view]"))return;const r=el.getBoundingClientRect(),s=stage.getBoundingClientRect();if(r.left>=s.left&&r.right<=s.right&&r.top>=s.top&&r.bottom<=s.bottom)return;const b=el.getBBox();let x=b.x+b.width/2,y=b.y+b.height/2;if(el.hasAttribute("data-agent")){const matrix=el.getCTM(),root=$<SVGSVGElement>("#floor").getCTM();if(matrix&&root){const p=new DOMPoint(x,y).matrixTransform(matrix).matrixTransform(root.inverse());x=(p.x-dx)/zoom;y=(p.y-dy)/zoom;}}dx=cameraWidth/2-x*zoom;dy=cameraHeight/2-y*zoom;updateTransform();});
 }
 function bindTargets(root:Element){
- root.querySelectorAll<HTMLElement>("[data-room],[data-agent],[data-desk],[data-view]").forEach(el=>{const activate=()=>{if(el.dataset.view){openView({kind:"expand"});}else if(el.dataset.agent)openView({kind:"agent",id:el.dataset.agent});else if(el.dataset.desk){const [roomId,index]=el.dataset.desk.split(":");const r=office.rooms.find(r=>r.id===roomId)!;const a=occupants(r)[Number(index)];openView(a?{kind:"agent",id:a.id}:{kind:"desk",roomId,index:Number(index)});}else openView({kind:"room",id:el.dataset.room!});};el.onclick=e=>{e.stopPropagation();activate();};if(el.tagName.toLowerCase()!=="button")el.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();e.stopPropagation();activate();}};});
+ root.querySelectorAll<HTMLElement>("[data-room],[data-agent],[data-desk],[data-view],[data-zone-focus]").forEach(el=>{const activate=()=>{if(el.dataset.zoneFocus!==undefined)focusZone(el.dataset.zoneFocus||null);else if(el.dataset.view){openView({kind:"expand"});}else if(el.dataset.agent)openView({kind:"agent",id:el.dataset.agent});else if(el.dataset.desk){const [roomId,index]=el.dataset.desk.split(":");const r=office.rooms.find(r=>r.id===roomId)!;const a=occupants(r)[Number(index)];openView(a?{kind:"agent",id:a.id}:{kind:"desk",roomId,index:Number(index)});}else openView({kind:"room",id:el.dataset.room!});};el.onclick=e=>{e.stopPropagation();activate();};if(el.tagName.toLowerCase()!=="button")el.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();e.stopPropagation();activate();}};});
 }
 function openView(view:View){
  const dialog=$<HTMLDialogElement>("#detail");if(!dialog.open){returnFocus=focusKey(document.activeElement);views=[];viewFocus=[];}else{const f=focusKey(document.activeElement);if(f)viewFocus.push(f);}
@@ -153,12 +202,12 @@ function backView(){if(views.length<2){closeViews();return;}views.pop();const f=
 function heading(text:string){return `<h2 id="detail-title" tabindex="-1">${escape(text)}</h2>`;}
 function renderView(){
  const view=views.at(-1)!;const fresh=!freshness().stale;let content="";
- if(view.kind==="rooms")content=heading("房间与成员")+`<p class="muted">${office.rooms.length} 个房间 · ${office.agents.length} 位${privateMode?"私有":"示例"}成员</p><div class="room-list">${office.rooms.map(roomRow).join("")}</div>${privateMode?"":'<button id="open-expand" class="secondary">＋ 扩建示例会议室</button>'}`;
+ if(view.kind==="rooms")content=heading("房间与成员")+`<p class="muted">${office.zones.map(z=>z.name).join(" / ")} · ${office.rooms.length} 个房间 · ${office.agents.length} 位${privateMode?"私有":"示例"}成员</p>${office.zones.map(z=>{const rooms=office.rooms.filter(r=>r.zone===z.id);if(!rooms.length)return "";return `<h3 class="zone-heading">${escape(z.name)}<small>${escape(z.description)} · ${zoneMemberCount(z.id)} 位成员</small></h3><div class="room-list">${rooms.map(roomRow).join("")}</div>`;}).join("")}${privateMode?"":'<button id="open-expand" class="secondary">＋ 扩建示例会议室</button>'}`;
  if(view.kind==="room"){
   const r=office.rooms.find(r=>r.id===view.id)!;content=heading(r.name)+`<p class="muted">${escape(r.topic)} · ${occupants(r).length}/${r.capacity}</p><div class="detail-agents">${occupants(r).map(a=>`<button data-agent="${a.id}"><i style="background:${a.color}"></i>${escape(a.name)}<span>${a.online?labels[a.activity]:"连接离线"}</span>${icon("arrow")}</button>`).join("")||'<p class="muted">这间房现在空闲。</p>'}</div><p class="muted">${privateMode?"成员位置和任务为客户端上报，不代表已连接执行进程。":"房间位置、讨论和活动均为示例，不表示真实任务协作。"}</p>${!privateMode&&(r.kind==="meeting"||r.kind==="discussing")?'<button id="finish-meeting" class="secondary">结束示例会议</button>':""}`;
  }
  if(view.kind==="agent"){
-  const a=office.agents.find(a=>a.id===view.id)!,ex=displayedExecution(a,privateMode,fresh&&!readFailed);content=`<div class="agent-title"><svg viewBox="-55 -55 110 110" aria-hidden="true" focusable="false">${bit(a,0,0,1.4,false)}</svg><div>${heading(a.name)}<p>${labels[a.activity]} · ${a.online?(privateMode?"上报在线":"连接在线"):(privateMode?"上报离线":"连接离线")}</p></div></div><div class="facts"><span>任务状态 <b id="agent-execution-state">${ex.label}${fresh?"":" · 旧快照"}</b></span><span>运行 ${ex.running} · 等待 ${ex.waiting} · 阻塞 ${ex.blocked}</span><span>${privateMode?"最后上报心跳":"最后示例心跳"} ${time(a.lastSeenAt)}</span>${privateMode?`<span>最后任务上报 ${time(a.tasksObservedAt??null)}</span>`:""}</div><h3>任务与交接</h3>${a.tasks.map(t=>`<div class="task-detail"><strong>${escape(t.title)}</strong><span>${escape(t.status)}${t.blocked?" · 阻塞":""}</span>${t.updatedAt?`<span>${privateMode?"最后上报任务事件":"最后示例任务事件"} ${time(t.updatedAt)}</span>`:""}${t.delegatedFrom?`<p>来源任务：${escape(t.delegatedFrom)}</p><p>${escape(t.handoffNote??"")}</p>${t.handoffAt?`<p>${privateMode?"上报交接时间":"示例交接时间"} ${time(t.handoffAt)}</p>`:""}`:""}</div>`).join("")||`<p class="muted">${privateMode?"没有任务上报；不完整或过期读取不能证明空闲。":"没有活动任务示例。"}</p>`}${privateMode?'<p class="muted">只读视图 · 状态来自客户端上报，未连接执行进程。在线 ≠ 正在运行。</p>':`<label class="field-label" for="demo-activity">切换本页演示动作</label><select id="demo-activity">${activities.map(s=>`<option value="${s}" ${a.activity===s?"selected":""}>${labels[s]}</option>`).join("")}</select><p class="muted">活动不改变任务执行状态，也不会调用真实 Agent。在线 ≠ 正在运行。</p>`}`;
+  const a=office.agents.find(a=>a.id===view.id)!,ex=displayedExecution(a,privateMode,fresh&&!readFailed);content=`<div class="agent-title"><svg viewBox="-55 -55 110 110" aria-hidden="true" focusable="false">${bit(a,0,0,1.4,false)}</svg><div>${heading(a.name)}<p>${labels[a.activity]} · ${a.online?(privateMode?"上报在线":"连接在线"):(privateMode?"上报离线":"连接离线")}</p></div></div><div class="facts"><span>任务状态 <b id="agent-execution-state">${ex.label}${fresh?"":" · 旧快照"}</b></span><span>运行 ${ex.running} · 等待 ${ex.waiting} · 阻塞 ${ex.blocked}</span><span>${privateMode?"最后上报心跳":"最后示例心跳"} ${time(a.lastSeenAt)}</span>${privateMode?`<span>最后任务上报 ${time(a.tasksObservedAt??null)}</span>`:""}<span>区域 ${escape(zoneLabel(a.zone))} · ${escape(office.rooms.find(r=>r.id===a.roomId)?.name??a.roomId)}</span></div>${lineageSection(a)}<h3>任务与交接</h3>${a.tasks.map(t=>`<div class="task-detail"><strong>${escape(t.title)}</strong><span>${escape(t.status)}${t.blocked?" · 阻塞":""}</span>${t.updatedAt?`<span>${privateMode?"最后上报任务事件":"最后示例任务事件"} ${time(t.updatedAt)}</span>`:""}${t.delegatedFrom?`<p>来源任务：${escape(t.delegatedFrom)}</p><p>${escape(t.handoffNote??"")}</p>${t.handoffAt?`<p>${privateMode?"上报交接时间":"示例交接时间"} ${time(t.handoffAt)}</p>`:""}`:""}</div>`).join("")||`<p class="muted">${privateMode?"没有任务上报；不完整或过期读取不能证明空闲。":"没有活动任务示例。"}</p>`}${privateMode?'<p class="muted">只读视图 · 状态来自客户端上报，未连接执行进程。在线 ≠ 正在运行。</p>':`<label class="field-label" for="demo-activity">切换本页演示动作</label><select id="demo-activity">${activities.map(s=>`<option value="${s}" ${a.activity===s?"selected":""}>${labels[s]}</option>`).join("")}</select><p class="muted">活动不改变任务执行状态，也不会调用真实 Agent。在线 ≠ 正在运行。</p>`}`;
  }
  if(view.kind==="desk"){const r=office.rooms.find(r=>r.id===view.roomId)!;content=heading("空工位 "+(view.index+1))+`<p class="muted">${escape(r.name)} · 暂无${privateMode?"私有":"示例"}成员或任务。</p>`;}
  if(view.kind==="mcp")content=heading("MCP 接入")+`<p>公开端点仅提供合成示例。尚未连接 Multica，也未验证 ChatGPT 实际授权接入。</p><p class="field-label">Streamable HTTP 端点</p><code id="endpoint">${location.origin}/mcp</code><button id="copy-endpoint" class="secondary">复制端点</button><h3>可读取</h3><ul><li>办公室全局状态与房间</li><li>Agent 的任务、连接状态和时间</li><li>有明确记录的示例任务交接</li></ul><p class="muted">本页模拟不更改服务器快照。真实数据默认关闭。</p><a href="https://github.com/hekmon8/bit-office#chatgpt--mcp" target="_blank" rel="noreferrer">查看连接说明 ↗</a>`;
@@ -166,7 +215,7 @@ function renderView(){
  if(view.kind==="status")content=heading("示例状态")+`<div class="facts"><span>${office.agents.filter(a=>a.online).length} 在线 · ${office.agents.filter(a=>!a.online).length} 离线</span><span>在线 ≠ 正在运行</span><span id="read-time">${lastSuccessfulReadAt?"最近成功服务器读取 "+time(lastSuccessfulReadAt):"尚无成功服务器读取"}</span><span id="read-quality">${freshness().label}</span><span id="page-source">当前页面来源：${snapshotSource==="server"?"服务器合成快照":"本地内置示例"}${localRevision?" · 已在本页修改":""}</span></div><p class="muted">读取超过 2 分钟标为旧快照。本页活动模拟不会刷新服务器读取时间或更改 MCP 数据。</p><h3>示例动态</h3><div class="events">${office.events.slice(0,6).map(e=>`<div><time>${time(e.at)}</time><p>${escape(e.message)}</p></div>`).join("")}</div>`;
  if(privateMode&&view.kind==="mcp")content=heading("私人 MCP 接入")+`<p>此实例使用独立授权。浏览器只读会话不能调用 MCP 管理工具。</p>${oauthConfigured?'<p class="muted">OAuth 参数已配置；仍需本人完成客户端授权。</p>':'<p class="muted">OAuth 尚未配置。当前可使用固定 Token，OAuth 需完成独立 KV 和 issuer 配置。</p>'}<code id="endpoint">${location.origin}${oauthConfigured?"/mcp/oauth":"/mcp"}</code><button id="copy-endpoint" class="secondary">复制端点</button><p class="muted">OAuth 需本人同意；支持固定 Token 的客户端可使用本站 /mcp。创建 Agent 仅登记记录，不启动执行进程。</p>`;
  if(privateMode&&view.kind==="settings")content=heading("私人办公室")+`<p class="muted">只读查看托管成员和任务上报。状态不代表已验证执行进程。</p><button id="refresh-private" class="secondary">刷新私有数据</button><form method="post" action="/api/viewer/logout"><button class="secondary">退出登录</button></form>`;
- if(privateMode&&view.kind==="status")content=heading("私有数据状态")+`<div class="facts"><span>来源：托管记录 · 客户端上报</span><span>未连接执行进程 · 在线 ≠ 正在运行</span><span id="private-unknown-count"></span><span id="read-time">最近成功服务器读取 ${time(lastSuccessfulReadAt)}</span><span id="read-quality">${freshness().label}</span></div><h3>最近上报</h3><div class="events">${office.events.slice(0,6).map(e=>`<div><time>${time(e.at)}</time><p>${escape(e.message)}</p></div>`).join("")||'<p class="muted">暂无上报记录。</p>'}</div>`;
+ if(privateMode&&view.kind==="status")content=heading("私有数据状态")+`<div class="facts"><span>来源：托管记录 · 客户端上报</span><span>未连接执行进程 · 在线 ≠ 正在运行</span><span id="private-unknown-count"></span><span>已退休 ${office.retiredCount??0} 条（保留历史，不在平面图占位）</span><span id="read-time">最近成功服务器读取 ${time(lastSuccessfulReadAt)}</span><span id="read-quality">${freshness().label}</span></div><h3>最近上报</h3><div class="events">${office.events.slice(0,6).map(e=>`<div><time>${time(e.at)}</time><p>${escape(e.message)}</p></div>`).join("")||'<p class="muted">暂无上报记录。</p>'}</div>`;
  if(view.kind==="expand")content=heading("扩建示例会议室")+`<p>在走廊末端增加一间 8 席会议室，仅影响本页示例。</p><p class="muted">当前 ${office.rooms.length}/20 间。扩建后可适配全图查看。</p><button id="confirm-expand" class="primary" ${office.rooms.length>=20?"disabled":""}>扩建一间</button>`;
  $("#detail-content").innerHTML=content;$("#back-detail").hidden=views.length<2;bindTargets($("#detail-content"));if(privateMode&&view.kind==="status")renderStatus();
  const on=(id:string,fn:()=>void)=>{const el=document.getElementById(id);if(el)el.onclick=fn;};
@@ -184,7 +233,7 @@ let toastTimer:ReturnType<typeof setTimeout>|undefined;
 function toast(message:string){clearTimeout(toastTimer);$("#toast").textContent=message;$("#toast").classList.add("visible");toastTimer=setTimeout(()=>$("#toast").classList.remove("visible"),2500);}
 function addEvent(message:string){office.events.unshift({at:new Date().toISOString(),message});office.events=office.events.slice(0,20);}
 function moveAgent(a:ViewerAgent,activity:Activity){if(privateMode)return false;if(!assignActivity(office as import("./model").Office,a as Agent,activity)){toast(labels[activity]+"房间已满");return false;}localRevision++;addEvent(a.name+" → "+labels[activity]+" · 仅本页模拟");return true;}
-function extendRoom(){if(privateMode)return;if(office.rooms.length>=20){toast("本演示最多 20 间房");return;}const i=office.rooms.length-7,x=1260+Math.floor(i/2)*300,y=i%2?385:30;office.rooms.push({id:"extra-"+i,name:"会议室 "+String.fromCharCode(67+i),kind:"meeting",topic:"空闲",capacity:8,x,y,w:280,h:260});localRevision++;addEvent("扩建了一间示例会议室");zoom=1;dx=dy=0;closeViews();dx=Math.min(0,cameraWidth-officeWidth());updateTransform();toast("示例会议室已扩建");}
+function extendRoom(){if(privateMode)return;if(office.rooms.length>=20){toast("本演示最多 20 间房");return;}const i=office.rooms.length-7,x=1260+Math.floor(i/2)*300,y=i%2?385:30;office.rooms.push({id:"extra-"+i,name:"会议室 "+String.fromCharCode(67+i),kind:"meeting",topic:"空闲",capacity:8,x,y,w:280,h:260,zone:defaultZoneId});localRevision++;addEvent("扩建了一间示例会议室");zoom=1;dx=dy=0;closeViews();dx=Math.min(0,cameraWidth-officeWidth());updateTransform();toast("示例会议室已扩建");}
 function entryMessage(message:string){$("#app").innerHTML=`<main class="entry-message"><h1>Bit 小屋</h1><p role="status">${message}</p><button id="retry-entry" class="secondary">重新读取</button></main>`;$("#retry-entry").onclick=()=>location.reload();}
 let refreshing=false;
 async function refreshPrivate(initial=!mounted){

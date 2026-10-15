@@ -25,6 +25,17 @@ export function fitViewport(width:number,height:number,sceneWidth:number,sceneHe
 export function constrainPan(offset:number,viewport:number,scene:number){
  return scene<=viewport?(viewport-scene)/2:Math.max(viewport-scene,Math.min(0,offset));
 }
+/**
+ * Camera for one rectangle of the floor (an area band): fit it to the stage and
+ * center it. Zoom never drops below 1 — the overview stays the floor's own
+ * scale — and is capped by the caller's maximum so a small band is not blown up.
+ */
+export function fitRect(width:number,height:number,rect:{x:number;y:number;w:number;h:number},maximumZoom:number){
+ const next=fitViewport(width,height,rect.w,rect.h);
+ const zoom=Math.max(1,Math.min(Math.max(1,maximumZoom),next.scale));
+ return {cameraWidth:next.width,cameraHeight:next.height,zoom,
+  dx:next.width/2-(rect.x+rect.w/2)*zoom,dy:next.height/2-(rect.y+rect.h/2)*zoom};
+}
 
 
 /** Conservative glyph budget for readable labels in very small overview rooms. */
