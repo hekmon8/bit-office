@@ -1,0 +1,41 @@
+{
+  "name": "dsh-bit-office",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH plugin: 把本机每个 DSH 会话与 subagent 自动登记成 bit-office 办公室里的持久 Agent 记录，并在会话标题栏提供「办公室」平面图标签页。",
+  "type": "module",
+  "license": "MIT",
+  "main": "./lib/index.mjs",
+  "exports": {
+    ".": "./lib/index.mjs",
+    "./client": "./lib/client.js",
+    "./floorplan": "./src/floorplan.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src/floorplan.mjs",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "check:client": "node scripts/build-client.mjs --check",
+    "test": "node --test --test-timeout=30000 \"test/**/*.test.mjs\"",
+    "gates": "node scripts/gates.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "dependencies": {},
+  "peerDependencies": {},
+  "engines": {
+    "node": ">=20"
+  }
+}
