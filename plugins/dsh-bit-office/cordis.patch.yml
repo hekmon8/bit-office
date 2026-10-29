@@ -1,0 +1,11 @@
+# dsh-bit-office — bundle 插件组合层
+# 声明把自身挂载为一条 Cordis 插件：Node half 负责
+#   ① 监听 session/created|disposed 与 subagent/start|end，自动把会话/subagent
+#      同步成 bit-office 办公室里的 Agent 记录（不依赖模型自觉调用工具）；
+#   ② 注册 bit_office_report / bit_office_state 两个模型工具；
+#   ③ 暴露同源只读路由 GET /api/dsh-bit-office/state 给 client half 轮询。
+# 注意 name 必须加引号（YAML 中 @ 开头为保留指示符；包名虽不以 @ 开头，
+# 但保持与生态其他 bundle 一致的引号写法更安全）。
+- insert:
+    - id: dsh-bit-office
+      name: 'dsh-bit-office'
