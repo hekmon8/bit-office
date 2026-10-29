@@ -18,11 +18,14 @@ canonical personal-office origin above.
 
 - Top-down office: meeting rooms, discussion room, desks, kitchen, fishing pond, charging nests.
 - Space-first desktop and mobile map with pan, zoom and pet / occupied-desk task details. Room lists, status, settings and MCP instructions open in dismissible dialogs with back navigation and focus restoration.
+- Animated pixel employees with four character types, typing, water breaks, snacks, stretching, conversation bubbles, resting and fishing. Character/action previews stay local to the page in both private and demo offices.
 - Browser-only demo activity changes and bounded meeting-room expansion.
 - Five public read-only MCP tools returning **synthetic sample data only**.
 - Three authenticated Agent-management tools with persistent server storage and revision checks.
 - An optional server-side MCP client and a protected office-state adapter, configured with a URL, authentication type and server-stored token.
 - Separate execution counts, connectivity, task handoff evidence and observation timestamps. The compact source badge remains visible; successful reads expire after two minutes and offline fallback is explicit.
+
+Ambient character routines are decorative and never change reported activity, connectivity or task execution. They pause behind dialogs and in background tabs, and respect reduced-motion preferences. Private viewer logins last 30 days from the next login; logout and credential rotation still revoke access.
 
 The public demo is stateless. Browser simulation is private to the current page and resets on reload; it does not update the MCP snapshot. No real Multica workspace, agent, task, credential or execution runtime is configured by default. All members and events are illustrative. “Meeting”, “resting” and “fishing” are demo animations, not inferred from runtime idleness.
 
