@@ -8,7 +8,7 @@ const command = z.discriminatedUnion("operation", [
  z.strictObject({ operation: z.literal("attempt"), bucket: hash })
 ]);
 type Session = { session: string; fingerprint: string; expires: number };
-export const viewerSessionSeconds = 1800;
+export const viewerSessionSeconds = 30 * 24 * 60 * 60;
 /** Strongly consistent auth-only keys; never included in the office snapshot. */
 export async function viewerStore(request: Request, state: DurableObjectState): Promise<Response> {
  if (request.method !== "POST") return Response.json({ error: "method_not_allowed" }, { status: 405 });

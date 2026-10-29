@@ -1,4 +1,5 @@
 import "./style.css";
+import {appearance,characterArt,actions,species,speech,type AmbientAction,type Species} from "./ambient";
 import {privateSnapshot,displayedExecution,syncPrivateUnknownCount,type ViewerOffice,type ViewerAgent} from "./viewer-client";
 import { demoOffice, labels, activities, type Agent, type Room, type Activity, validateOffice, roomSlot, assignActivity } from "./model";
 import {readFreshness,layoutRoom,floorHeight,fitViewport,constrainPan,compactRoomLabel} from "./view";
@@ -9,7 +10,30 @@ let lastSuccessfulReadAt:string|null=null;
 const $=<T extends Element=HTMLElement>(s:string)=>document.querySelector(s) as T;
 const escape=(s:string)=>s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
 function time(s:string|null){if(!s)return "未上报";return new Date(s).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});}
-function bit(a:ViewerAgent,x:number,y:number,scale=1,interactive=true){const sleepy=a.activity==="offline";return `<g transform="translate(${x},${y}) scale(${scale})" class="${interactive?"pet-hit":"pet-art"}" ${interactive?`role="button" tabindex="0" data-agent="${a.id}" aria-label="${escape(a.name)}，${a.online?labels[a.activity]:"连接离线"}"`:""}><rect x="-24" y="-24" width="48" height="48" fill="transparent"/><g class="pet ${simulating&&!sleepy?"bounce":""}"><path d="M-13 -12v-8h7v6h12v-6h7v8h4v24h-4v5h-7v-5H-6v5h-7v-5h-4v-24z" fill="${a.color}" opacity="${sleepy?".48":"1"}"/><path d="${sleepy?"M-8 -2h5M3 -2h5":"M-7 -4v4M6 -4v4"}" stroke="#14171b" stroke-width="3"/>${a.activity==="meeting"||a.activity==="discussing"?'<path d="M15 -27h18v12H21l-4 5v-5h-2z" fill="#666b78"/><path d="M19 -22h10" stroke="#dadde3" stroke-width="2"/>':""}${sleepy?'<text x="20" y="-15" class="zzz">z</text>':""}${a.activity==="resting"?'<path d="M11 6h9v8h-9zM20 8h4v4h-4" fill="#d2af77"/>':""}${a.activity==="fishing"?'<path d="M15 10l18 -29 17 17" stroke="#baac91" fill="none" stroke-width="2"/>':""}</g><text y="36" class="pet-name">${escape(a.name)}</text><circle cx="21" cy="29" r="3" fill="${a.online?"#88b9a0":"#676d7a"}"/></g>`;}
+let ambientTick=0;
+const visualOverrides=new Map<string,{action?:AmbientAction;species?:Species}>();
+function agentAppearance(a:ViewerAgent){return {...appearance(a.id,a.online?a.activity:"offline",ambientTick),...visualOverrides.get(a.id)};}
+function bit(a:ViewerAgent,x:number,y:number,scale=1,interactive=true){
+ const look=agentAppearance(a),sleeping=look.action==="rest";
+ const candidates=office.agents.filter(a=>a.online&&(!filter||a.activity===filter));
+ const speaker=candidates.length?candidates[Math.floor(ambientTick/3)%candidates.length]:undefined;
+ const say=interactive&&a.id===speaker?.id&&ambientTick%3===0?speech[look.action][Math.floor(ambientTick/3)%2]:"";
+ return `<g transform="translate(${x},${y}) scale(${scale})" class="${interactive?"pet-hit":"pet-art"}" ${interactive?`role="button" tabindex="0" data-agent="${a.id}" aria-label="${escape(a.name)}，${a.online?labels[a.activity]:"连接离线"}，${species[look.species]}，外观动作：${actions[look.action]}"`:""}><rect x="-24" y="-38" width="48" height="62" fill="transparent"/>${characterArt(look,a.color,sleeping)}${say?`<g class="pet-speech" aria-hidden="true"><path d="M-41 -64h82v22H8l-8 6v-6h-41z" fill="#dde3d6" stroke="#68776f"/><text x="0" y="-49">${escape(say)}</text></g>`:""}<text y="36" class="pet-name">${escape(a.name)}</text><circle cx="21" cy="29" r="3" fill="${a.online?"#88b9a0":"#676d7a"}"/></g>`;
+}
+function refreshAmbient(){
+ if(document.hidden||$<HTMLDialogElement>("#detail").open||window.matchMedia("(prefers-reduced-motion: reduce)").matches)return;
+ ambientTick++;
+ const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
+ $("#map-stage").querySelectorAll<SVGGElement>(".pet-hit").forEach(el=>{
+  const a=office.agents.find(a=>a.id===el.dataset.agent)!;
+  svg.innerHTML=bit(a,0,0);
+  const next=svg.firstElementChild!,pet=el.querySelector(".pet")!,nextPet=next.querySelector(".pet")!;
+  if(pet.outerHTML!==nextPet.outerHTML)pet.replaceWith(nextPet);
+  const bubble=el.querySelector(".pet-speech"),nextBubble=next.querySelector(".pet-speech");
+  if(bubble?.outerHTML!==nextBubble?.outerHTML){bubble?.remove();if(nextBubble)el.insertBefore(nextBubble,el.querySelector(".pet-name"));}
+  el.setAttribute("aria-label",next.getAttribute("aria-label")!);
+ });
+}
 function furniture(r:Room){
  const {x,y,w,h}=r;const c="#6d6159",edge="#363c45";
  if(r.kind==="meeting")return `<rect x="${x+w/2-74}" y="${y+90}" width="148" height="91" rx="5" fill="#51483f" stroke="#786a58"/><path d="M${x+45} ${y+15}h${w-90}" stroke="#777f94" stroke-width="6"/>${[0,1,2].map(i=>`<rect x="${x+w/2-64+i*51}" y="${y+77}" width="28" height="10" rx="2" fill="${edge}"/><rect x="${x+w/2-64+i*51}" y="${y+185}" width="28" height="10" rx="2" fill="${edge}"/>`).join("")}`;
@@ -76,6 +100,8 @@ function mount(){
  $("#zoom-in").onclick=()=>changeZoom(zoom*.35);$("#zoom-out").onclick=()=>changeZoom(-zoom*.35);$("#reset-view").onclick=()=>{zoom=1;dx=dy=0;resizeCamera();};
  bindCanvas();renderOffice();new ResizeObserver(()=>resizeCamera()).observe($("#map-stage"));
  setInterval(()=>renderStatus(),30000);
+ setInterval(refreshAmbient,2500);
+ document.addEventListener("visibilitychange",()=>document.body.classList.toggle("ambient-paused",document.hidden));
  window.addEventListener("focus",renderStatus);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")renderStatus();});
 }
 function renderOffice(){
@@ -146,9 +172,9 @@ function bindTargets(root:Element){
 }
 function openView(view:View){
  const dialog=$<HTMLDialogElement>("#detail");if(!dialog.open){returnFocus=focusKey(document.activeElement);views=[];viewFocus=[];}else{const f=focusKey(document.activeElement);if(f)viewFocus.push(f);}
- views.push(view);renderView();if(!dialog.open)dialog.showModal();$("#detail-title").focus({preventScroll:true});
+ views.push(view);renderView();if(!dialog.open)dialog.showModal();document.body.classList.add("detail-open");$("#detail-title").focus({preventScroll:true});
 }
-function closeViews(){const focus=returnFocus;$<HTMLDialogElement>("#detail").close();views=[];viewFocus=[];renderOffice();restoreFocus(focus);}
+function closeViews(){document.body.classList.remove("detail-open");const focus=returnFocus;$<HTMLDialogElement>("#detail").close();views=[];viewFocus=[];renderOffice();restoreFocus(focus);}
 function backView(){if(views.length<2){closeViews();return;}views.pop();const f=viewFocus.pop()??null;renderView();if(f)restoreFocus(f);else $("#detail-title").focus();}
 function heading(text:string){return `<h2 id="detail-title" tabindex="-1">${escape(text)}</h2>`;}
 function renderView(){
@@ -158,7 +184,7 @@ function renderView(){
   const r=office.rooms.find(r=>r.id===view.id)!;content=heading(r.name)+`<p class="muted">${escape(r.topic)} · ${occupants(r).length}/${r.capacity}</p><div class="detail-agents">${occupants(r).map(a=>`<button data-agent="${a.id}"><i style="background:${a.color}"></i>${escape(a.name)}<span>${a.online?labels[a.activity]:"连接离线"}</span>${icon("arrow")}</button>`).join("")||'<p class="muted">这间房现在空闲。</p>'}</div><p class="muted">${privateMode?"成员位置和任务为客户端上报，不代表已连接执行进程。":"房间位置、讨论和活动均为示例，不表示真实任务协作。"}</p>${!privateMode&&(r.kind==="meeting"||r.kind==="discussing")?'<button id="finish-meeting" class="secondary">结束示例会议</button>':""}`;
  }
  if(view.kind==="agent"){
-  const a=office.agents.find(a=>a.id===view.id)!,ex=displayedExecution(a,privateMode,fresh&&!readFailed);content=`<div class="agent-title"><svg viewBox="-55 -55 110 110" aria-hidden="true" focusable="false">${bit(a,0,0,1.4,false)}</svg><div>${heading(a.name)}<p>${labels[a.activity]} · ${a.online?(privateMode?"上报在线":"连接在线"):(privateMode?"上报离线":"连接离线")}</p></div></div><div class="facts"><span>任务状态 <b id="agent-execution-state">${ex.label}${fresh?"":" · 旧快照"}</b></span><span>运行 ${ex.running} · 等待 ${ex.waiting} · 阻塞 ${ex.blocked}</span><span>${privateMode?"最后上报心跳":"最后示例心跳"} ${time(a.lastSeenAt)}</span>${privateMode?`<span>最后任务上报 ${time(a.tasksObservedAt??null)}</span>`:""}</div><h3>任务与交接</h3>${a.tasks.map(t=>`<div class="task-detail"><strong>${escape(t.title)}</strong><span>${escape(t.status)}${t.blocked?" · 阻塞":""}</span>${t.updatedAt?`<span>${privateMode?"最后上报任务事件":"最后示例任务事件"} ${time(t.updatedAt)}</span>`:""}${t.delegatedFrom?`<p>来源任务：${escape(t.delegatedFrom)}</p><p>${escape(t.handoffNote??"")}</p>${t.handoffAt?`<p>${privateMode?"上报交接时间":"示例交接时间"} ${time(t.handoffAt)}</p>`:""}`:""}</div>`).join("")||`<p class="muted">${privateMode?"没有任务上报；不完整或过期读取不能证明空闲。":"没有活动任务示例。"}</p>`}${privateMode?'<p class="muted">只读视图 · 状态来自客户端上报，未连接执行进程。在线 ≠ 正在运行。</p>':`<label class="field-label" for="demo-activity">切换本页演示动作</label><select id="demo-activity">${activities.map(s=>`<option value="${s}" ${a.activity===s?"selected":""}>${labels[s]}</option>`).join("")}</select><p class="muted">活动不改变任务执行状态，也不会调用真实 Agent。在线 ≠ 正在运行。</p>`}`;
+  const a=office.agents.find(a=>a.id===view.id)!,automatic=appearance(a.id,a.online?a.activity:"offline",ambientTick),override=visualOverrides.get(a.id),ex=displayedExecution(a,privateMode,fresh&&!readFailed);content=`<div class="agent-title"><svg viewBox="-55 -55 110 110" aria-hidden="true" focusable="false">${bit(a,0,0,1.4,false)}</svg><div>${heading(a.name)}<p>${labels[a.activity]} · ${a.online?(privateMode?"上报在线":"连接在线"):(privateMode?"上报离线":"连接离线")}</p></div></div><div class="appearance-controls"><label for="visual-species">角色<select id="visual-species"><option value="">自动 · ${species[automatic.species]}</option>${Object.entries(species).map(([id,name])=>`<option value="${id}" ${override?.species===id?"selected":""}>${name}</option>`).join("")}</select></label><label for="visual-action">外观动作<select id="visual-action"><option value="">自动 · ${actions[automatic.action]}</option>${Object.entries(actions).map(([id,name])=>`<option value="${id}" ${override?.action===id?"selected":""}>${name}</option>`).join("")}</select></label></div><p class="muted visual-note">角色、动作与气泡仅为本页装饰，不代表任务或在线状态。</p><div class="facts"><span>任务状态 <b id="agent-execution-state">${ex.label}${fresh?"":" · 旧快照"}</b></span><span>运行 ${ex.running} · 等待 ${ex.waiting} · 阻塞 ${ex.blocked}</span><span>${privateMode?"最后上报心跳":"最后示例心跳"} ${time(a.lastSeenAt)}</span>${privateMode?`<span>最后任务上报 ${time(a.tasksObservedAt??null)}</span>`:""}</div><h3>任务与交接</h3>${a.tasks.map(t=>`<div class="task-detail"><strong>${escape(t.title)}</strong><span>${escape(t.status)}${t.blocked?" · 阻塞":""}</span>${t.updatedAt?`<span>${privateMode?"最后上报任务事件":"最后示例任务事件"} ${time(t.updatedAt)}</span>`:""}${t.delegatedFrom?`<p>来源任务：${escape(t.delegatedFrom)}</p><p>${escape(t.handoffNote??"")}</p>${t.handoffAt?`<p>${privateMode?"上报交接时间":"示例交接时间"} ${time(t.handoffAt)}</p>`:""}`:""}</div>`).join("")||`<p class="muted">${privateMode?"没有任务上报；不完整或过期读取不能证明空闲。":"没有活动任务示例。"}</p>`}${privateMode?'<p class="muted">只读视图 · 状态来自客户端上报，未连接执行进程。在线 ≠ 正在运行。</p>':`<label class="field-label" for="demo-activity">切换示例房间活动</label><select id="demo-activity">${activities.map(s=>`<option value="${s}" ${a.activity===s?"selected":""}>${labels[s]}</option>`).join("")}</select><p class="muted">活动不改变任务执行状态，也不会调用真实 Agent。在线 ≠ 正在运行。</p>`}`;
  }
  if(view.kind==="desk"){const r=office.rooms.find(r=>r.id===view.roomId)!;content=heading("空工位 "+(view.index+1))+`<p class="muted">${escape(r.name)} · 暂无${privateMode?"私有":"示例"}成员或任务。</p>`;}
  if(view.kind==="mcp")content=heading("MCP 接入")+`<p>公开端点仅提供合成示例。尚未连接 Multica，也未验证 ChatGPT 实际授权接入。</p><p class="field-label">Streamable HTTP 端点</p><code id="endpoint">${location.origin}/mcp</code><button id="copy-endpoint" class="secondary">复制端点</button><h3>可读取</h3><ul><li>办公室全局状态与房间</li><li>Agent 的任务、连接状态和时间</li><li>有明确记录的示例任务交接</li></ul><p class="muted">本页模拟不更改服务器快照。真实数据默认关闭。</p><a href="https://github.com/hekmon8/bit-office#chatgpt--mcp" target="_blank" rel="noreferrer">查看连接说明 ↗</a>`;
@@ -173,6 +199,14 @@ function renderView(){
  on("refresh-private",()=>{void refreshPrivate();});
  on("open-expand",()=>openView({kind:"expand"}));on("confirm-expand",extendRoom);
  on("finish-meeting",()=>{if(privateMode||view.kind!=="room")return;const r=office.rooms.find(r=>r.id===view.id)!,members=occupants(r).filter(a=>a.online),available=office.rooms.filter(room=>room.kind==="working").reduce((n,room)=>n+room.capacity-occupants(room).length,0);if(available<members.length){toast("工位已满，请先释放工位");return;}members.forEach(a=>assignActivity(office as import("./model").Office,a as Agent,"working"));localRevision++;r.topic="空闲";addEvent(r.name+" 示例会议结束");closeViews();});
+ for(const [id,key] of [["visual-species","species"],["visual-action","action"]] as const){
+  const control=document.getElementById(id) as HTMLSelectElement|null;
+  if(control&&view.kind==="agent")control.onchange=()=>{
+   const next={...visualOverrides.get(view.id)};
+   if(!control.value)delete next[key];else if(key==="species")next.species=control.value as Species;else next.action=control.value as AmbientAction;
+   visualOverrides.set(view.id,next);renderView();$("#"+id).focus();
+  };
+ }
  const activity=document.getElementById("demo-activity") as HTMLSelectElement|null;if(activity&&view.kind==="agent")activity.onchange=()=>{const a=office.agents.find(a=>a.id===view.id)!;if(moveAgent(a,activity.value as Activity))closeViews();else renderView();};
  const simulation=document.getElementById("simulation") as HTMLInputElement|null;if(simulation)simulation.onchange=()=>{simulating=simulation.checked;clearInterval(simTimer);if(simulating)simTimer=setInterval(()=>{if($<HTMLDialogElement>("#detail").open)return;const a=office.agents[Math.floor(Math.random()*office.agents.length)];moveAgent(a,activities[Math.floor(Math.random()*activities.length)]);renderOffice();},6000);};
  const activityFilter=document.getElementById("activity-filter") as HTMLSelectElement|null;if(activityFilter)activityFilter.onchange=()=>{filter=activityFilter.value as Activity|"";renderOffice();renderView();$("#activity-filter").focus();};

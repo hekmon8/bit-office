@@ -22,7 +22,7 @@ function cookie(request: Request) {
  return /^[a-f0-9]{64}$/.test(value) ? value : null;
 }
 function sessionCookie(value: string, seconds = viewerSessionSeconds) {
- return `${cookieName}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${seconds}`;
+ return `${cookieName}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${seconds}`;
 }
 async function call(env: ViewerEnv, input: unknown) {
  const stub = env.OFFICE!.get(env.OFFICE!.idFromName("office"));

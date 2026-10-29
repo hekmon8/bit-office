@@ -85,11 +85,20 @@ describe("private read-only viewer sessions",()=>{
   const s=setup();for(const path of ["/","/index.html","/rooms"]){const r=await s.fetch(path);const html=await r.text();expect(html).toContain("私人办公室");expect(html).not.toContain("<h1>APP</h1>");expect(r.headers.get("Cache-Control")).toBe("no-store");expect(r.headers.get("Referrer-Policy")).toBe("same-origin");}
   expect((await s.fetch("/api/viewer/state")).status).toBe(401);expect(s.env.ASSETS.fetch).not.toHaveBeenCalled();
  });
- it("creates a short secure cookie while storing neither credential nor raw session",async()=>{
+ it("creates a persistent secure cookie while storing neither credential nor raw session",async()=>{
   const s=setup(),r=await s.login();expect(r.status).toBe(303);expect(r.headers.get("Location")).toBe("/");const c=r.headers.get("Set-Cookie")!;
-  for(const flag of ["__Host-bit-office-viewer=","HttpOnly","Secure","SameSite=Strict","Path=/","Max-Age=1800"])expect(c).toContain(flag);
+  for(const flag of ["__Host-bit-office-viewer=","HttpOnly","Secure","SameSite=Lax","Path=/","Max-Age=2592000"])expect(c).toContain(flag);
   expect(JSON.stringify(Array.from(s.data.values()))).not.toContain(token);expect(JSON.stringify(Array.from(s.data.values()))).not.toContain(cookie(r).split("=")[1]);
   const page=await s.fetch("/",{headers:{Cookie:cookie(r)}});expect(await page.text()).toContain("APP");expect(page.headers.get("Cache-Control")).toBe("no-store");
+ });
+ it("keeps a login beyond thirty minutes and across days, then expires at thirty days",async()=>{
+  vi.useFakeTimers();const start=Date.now(),s=setup(),c=cookie(await s.login());
+  for(const elapsed of [31*60*1000,24*60*60*1000,30*24*60*60*1000-1]){
+   vi.setSystemTime(start+elapsed);
+   expect((await s.fetch("/api/viewer/state",{headers:{Cookie:c}})).status).toBe(200);
+  }
+  vi.setSystemTime(start+30*24*60*60*1000);
+  expect((await s.fetch("/api/viewer/state",{headers:{Cookie:c}})).status).toBe(401);
  });
  it("reads only projected managed records with nullable heartbeat and unknown task completeness",async()=>{
   const s=setup();await s.rpc({Authorization:`Bearer ${token}`} ,"tools/call",{name:"create_agent",arguments:{agent_id:"private-agent",name:"Private Agent"}});
@@ -127,7 +136,7 @@ describe("private read-only viewer sessions",()=>{
   const sharedRequest=new Request("https://other.test/api/viewer/state",{headers:{Cookie:c}});expect((await privateWorker.fetch(sharedRequest,{...s.env,OAUTH_ISSUER:"https://other.test"},{} as never)).status).toBe(401);
   expect((await s.fetch("/api/viewer/state",{headers:{Cookie:c+"; "+c}})).status).toBe(401);
   const request=s.request("/api/viewer/state",{headers:{Cookie:c}});expect((await privateWorker.fetch(request,{...s.env,OFFICE_MCP_TOKEN:"unit-test-rotated-credential-32-characters"},{} as never)).status).toBe(401);
-  vi.useFakeTimers();vi.setSystemTime(Date.now()+1801000);expect((await s.fetch("/api/viewer/state",{headers:{Cookie:c}})).status).toBe(401);
+  vi.useFakeTimers();vi.setSystemTime(Date.now()+30*24*60*60*1000);expect((await s.fetch("/api/viewer/state",{headers:{Cookie:c}})).status).toBe(401);
  });
  it("does not permit logout via GET or foreign origins; never returns private fallback on storage failure",async()=>{
   const s=setup(),c=cookie(await s.login());expect((await s.fetch("/api/viewer/logout",{headers:{Cookie:c}})).status).toBe(405);
